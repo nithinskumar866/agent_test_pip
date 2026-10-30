@@ -4,14 +4,20 @@ Rather than replacing nodes on the user's graph (which breaks compiled
 ``PregelNode`` objects and leaks across runs), the adapter runs the graph with
 ``stream(stream_mode="updates")``: each yielded update is one node execution.
 Tool executions are read from the ``ToolMessage`` objects that tool nodes add
-to the state.
+to the state, and tool mocks are applied to LangChain tools during the run.
+
+Whether a mocked tool failure crashes the graph or becomes an error
+``ToolMessage`` is decided by the graph itself (``ToolNode(handle_tool_errors=...)``),
+exactly as for a real failure.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Any, ClassVar
+from contextlib import contextmanager
+from typing import Any, ClassVar, Iterator
 
+from agenttest.adapters._langchain_tools import langchain_tool_mocks
 from agenttest.adapters.base import BaseAdapter, call_agent
 from agenttest.core.trace import record_step
 
@@ -41,6 +47,11 @@ class LangGraphAdapter(BaseAdapter):
     @classmethod
     def can_handle(cls, agent: Any) -> bool:
         return type(agent).__module__.startswith("langgraph") and hasattr(agent, "stream")
+
+    @contextmanager
+    def instrument(self) -> Iterator[None]:
+        with langchain_tool_mocks():
+            yield
 
     def invoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
         if not hasattr(agent, "stream"):

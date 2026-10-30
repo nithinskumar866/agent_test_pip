@@ -1,4 +1,14 @@
-"""Pure Python structural assertions for agent results. Zero network or LLM calls.
+"""Pure Python structural checks for agent results. Zero network or LLM calls.
+
+Two layers:
+
+* **predicates** (``word_count_between``, ``tool_was_called``, ...) return a bool;
+* **assertions** (``assert_word_count_between``, ...) raise ``AssertionError``
+  with a message that says what was expected, what was found, and shows the
+  output — and return ``True`` when they pass.
+
+Every function accepts either an :class:`~agenttest.AgentResult` or the raw
+value it inspects (a string, a list of tool names, a number).
 """
 
 from __future__ import annotations
@@ -8,6 +18,18 @@ import re
 from typing import Any
 
 __all__ = [
+    # predicates
+    "word_count_between",
+    "steps_at_most",
+    "tool_was_called",
+    "tool_was_not_called",
+    "latency_under",
+    "tokens_under",
+    "output_contains",
+    "output_matches_regex",
+    "output_is_valid_json",
+    "gracefully_degraded",
+    # assertions
     "assert_word_count_between",
     "assert_steps_at_most",
     "assert_steps_taken_max",
@@ -24,22 +46,96 @@ __all__ = [
     "assert_gracefully_degraded",
 ]
 
+_EXCERPT_CHARS = 300
 
-def _extract_text(target: Any) -> str:
+
+def _text(target: Any) -> str:
     if hasattr(target, "output"):
         return str(target.output)
     return str(target)
 
 
+def _field(target: Any, name: str, convert: Any) -> Any:
+    return getattr(target, name) if hasattr(target, name) else convert(target)
+
+
+def _tools(target: Any) -> list[str]:
+    return list(getattr(target, "tools_called", target))
+
+
+def excerpt(text: str, limit: int = _EXCERPT_CHARS) -> str:
+    """The output, shortened for failure messages."""
+    text = text.strip()
+    return text if len(text) <= limit else f"{text[:limit]}… [{len(text) - limit} more chars]"
+
+
+def fail(message: str, target: Any = None) -> None:
+    """Raise ``AssertionError``, appending the agent output when there is one."""
+    if target is not None and hasattr(target, "output"):
+        message = f"{message}\n  output: {excerpt(str(target.output))!r}"
+    raise AssertionError(message)
+
+
+# --- predicates --------------------------------------------------------------
+
+def word_count_between(output: Any, min_count: int, max_count: int) -> bool:
+    return min_count <= len(_text(output).split()) <= max_count
+
+
+def steps_at_most(steps_taken: Any, max_steps: int) -> bool:
+    return _field(steps_taken, "steps_taken", int) <= max_steps
+
+
+def tool_was_called(tools_called: Any, tool_name: str) -> bool:
+    return tool_name in _tools(tools_called)
+
+
+def tool_was_not_called(tools_called: Any, tool_name: str) -> bool:
+    return tool_name not in _tools(tools_called)
+
+
+def latency_under(latency_ms: Any, threshold_ms: float) -> bool:
+    return _field(latency_ms, "latency_ms", float) < threshold_ms
+
+
+def tokens_under(tokens_used: Any, max_tokens: int) -> bool:
+    return _field(tokens_used, "tokens_used", int) < max_tokens
+
+
+def output_contains(output: Any, substring: str) -> bool:
+    return substring.lower() in _text(output).lower()
+
+
+def output_matches_regex(output: Any, pattern: str) -> bool:
+    return re.search(pattern, _text(output)) is not None
+
+
+def output_is_valid_json(output: Any) -> bool:
+    try:
+        json.loads(_text(output))
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return False
+    return True
+
+
+def gracefully_degraded(result: Any) -> bool:
+    return getattr(result, "gracefully_degraded", False) is True
+
+
+# --- assertions --------------------------------------------------------------
+
 def assert_word_count_between(output: Any, min_count: int, max_count: int) -> bool:
-    text = _extract_text(output)
-    count = len(text.split())
-    return min_count <= count <= max_count
+    count = len(_text(output).split())
+    if not min_count <= count <= max_count:
+        fail(f"Expected {min_count}–{max_count} words, got {count}.", output)
+    return True
 
 
 def assert_steps_at_most(steps_taken: Any, max_steps: int) -> bool:
-    steps = steps_taken.steps_taken if hasattr(steps_taken, "steps_taken") else int(steps_taken)
-    return steps <= max_steps
+    steps = _field(steps_taken, "steps_taken", int)
+    if steps > max_steps:
+        fail(f"Expected at most {max_steps} steps, agent took {steps}.", steps_taken)
+    return True
 
 
 def assert_steps_taken_max(result: Any, max_steps: int) -> bool:
@@ -47,18 +143,25 @@ def assert_steps_taken_max(result: Any, max_steps: int) -> bool:
 
 
 def assert_tool_was_called(tools_called: Any, tool_name: str) -> bool:
-    tools = tools_called.tools_called if hasattr(tools_called, "tools_called") else tools_called
-    return tool_name in tools
+    tools = _tools(tools_called)
+    if tool_name not in tools:
+        fail(f"Expected tool {tool_name!r} to be called; tools called: {tools or 'none'}.", tools_called)
+    return True
 
 
 def assert_tool_was_not_called(tools_called: Any, tool_name: str) -> bool:
-    tools = tools_called.tools_called if hasattr(tools_called, "tools_called") else tools_called
-    return tool_name not in tools
+    tools = _tools(tools_called)
+    if tool_name in tools:
+        fail(f"Expected tool {tool_name!r} not to be called; it was called {tools.count(tool_name)} time(s).",
+             tools_called)
+    return True
 
 
 def assert_latency_under(latency_ms: Any, threshold_ms: float) -> bool:
-    lat = latency_ms.latency_ms if hasattr(latency_ms, "latency_ms") else float(latency_ms)
-    return lat < threshold_ms
+    latency = _field(latency_ms, "latency_ms", float)
+    if latency >= threshold_ms:
+        fail(f"Expected latency under {threshold_ms:g} ms, got {latency:.1f} ms.", latency_ms)
+    return True
 
 
 def assert_latency_below(result: Any, max_ms: float) -> bool:
@@ -66,18 +169,22 @@ def assert_latency_below(result: Any, max_ms: float) -> bool:
 
 
 def assert_tokens_under(tokens_used: Any, max_tokens: int) -> bool:
-    tok = tokens_used.tokens_used if hasattr(tokens_used, "tokens_used") else int(tokens_used)
-    return tok < max_tokens
+    tokens = _field(tokens_used, "tokens_used", int)
+    if tokens >= max_tokens:
+        fail(f"Expected fewer than {max_tokens} tokens, used {tokens}.", tokens_used)
+    return True
 
 
 def assert_output_contains(output: Any, substring: str) -> bool:
-    text = _extract_text(output)
-    return substring.lower() in text.lower()
+    if not output_contains(output, substring):
+        fail(f"Expected output to contain {substring!r} (case-insensitive).\n  output: {excerpt(_text(output))!r}")
+    return True
 
 
 def assert_output_matches_regex(output: Any, pattern: str) -> bool:
-    text = _extract_text(output)
-    return bool(re.search(pattern, text))
+    if not output_matches_regex(output, pattern):
+        fail(f"Expected output to match /{pattern}/.\n  output: {excerpt(_text(output))!r}")
+    return True
 
 
 def assert_regex_match(result: Any, pattern: str) -> bool:
@@ -85,12 +192,12 @@ def assert_regex_match(result: Any, pattern: str) -> bool:
 
 
 def assert_output_is_valid_json(output: Any) -> bool:
-    text = _extract_text(output)
+    text = _text(output)
     try:
         json.loads(text)
-        return True
-    except (json.JSONDecodeError, ValueError, TypeError):
-        return False
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        fail(f"Expected valid JSON output: {exc}.\n  output: {excerpt(text)!r}")
+    return True
 
 
 def assert_valid_json(result: Any) -> bool:
@@ -98,4 +205,15 @@ def assert_valid_json(result: Any) -> bool:
 
 
 def assert_gracefully_degraded(result: Any) -> bool:
-    return getattr(result, "gracefully_degraded", False) is True
+    if gracefully_degraded(result):
+        return True
+    trace = getattr(result, "trace", None)
+    failed = [s.name for s in getattr(trace, "failed_tool_calls", [])] if trace is not None else []
+    if getattr(result, "success", True) is False:
+        reason = f"the agent crashed: {getattr(result, 'error', None)}"
+    elif not failed:
+        reason = "no tool failed during the run (did the mock match a tool name?)"
+    else:
+        reason = f"tools {failed} failed but the agent produced no output"
+    fail(f"Expected the agent to degrade gracefully, but {reason}.", result)
+    return True

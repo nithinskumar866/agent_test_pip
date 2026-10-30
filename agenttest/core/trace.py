@@ -16,11 +16,13 @@ import inspect
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Callable, Iterator, Literal, TypeVar, overload
+from typing import Any, Awaitable, Callable, Iterator, Literal, TypeVar, overload
 
 from pydantic import BaseModel, Field
 
-__all__ = ["Step", "Trace", "tracing", "current_trace", "record_step", "tool"]
+from agenttest.mocks._registry import active_mock, apply_mock, apply_mock_async, in_tool_call
+
+__all__ = ["Step", "Trace", "tracing", "current_trace", "record_step", "run_tool", "arun_tool", "tool"]
 
 StepKind = Literal["llm", "tool", "node"]
 
@@ -120,6 +122,59 @@ def _describe_call(sig: inspect.Signature | None, args: tuple[Any, ...], kwargs:
     return dict(bound.arguments)
 
 
+class _ToolCall:
+    """Records one tool call as a ``tool`` step when the block exits.
+
+    Outside a run nothing is recorded.
+    """
+
+    def __init__(self, name: str, call_input: Any) -> None:
+        self._name = name
+        self._input = call_input
+        self._output: Any = None
+        self._mock = active_mock(name)
+
+    def __enter__(self) -> _ToolCall:
+        self._start = time.perf_counter()
+        return self
+
+    def done(self, output: Any) -> Any:
+        self._output = output
+        return output
+
+    def __exit__(self, exc_type: Any, exc: BaseException | None, tb: Any) -> None:
+        record_step(
+            "tool",
+            self._name,
+            input=self._input,
+            output=None if exc is not None else self._output,
+            error=f"{type(exc).__name__}: {exc}" if isinstance(exc, Exception) else None,
+            duration_ms=(time.perf_counter() - self._start) * 1000,
+            metadata={"mocked": self._mock.type} if self._mock is not None else {},
+        )
+
+
+def run_tool(name: str, call_real: Callable[[], Any], *, input: Any = None) -> Any:
+    """Execute one tool call: apply any active mock, and record a ``tool`` step.
+
+    The single path every integration uses for tools it intercepts. Nested
+    interception of the same call (see :func:`~agenttest.mocks._registry.in_tool_call`)
+    is passed straight through, so a call is mocked and recorded exactly once.
+    """
+    if in_tool_call(name) or current_trace() is None:
+        return apply_mock(name, call_real)
+    with _ToolCall(name, input) as call:
+        return call.done(apply_mock(name, call_real))
+
+
+async def arun_tool(name: str, call_real: Callable[[], Awaitable[Any]], *, input: Any = None) -> Any:
+    """Async twin of :func:`run_tool`."""
+    if in_tool_call(name) or current_trace() is None:
+        return await apply_mock_async(name, call_real)
+    with _ToolCall(name, input) as call:
+        return call.done(await apply_mock_async(name, call_real))
+
+
 @overload
 def tool(fn: F, /) -> F: ...
 @overload
@@ -136,7 +191,8 @@ def tool(fn: Callable[..., Any] | None = None, /, *, name: str | None = None) ->
         def web_search(query: str) -> str: ...
 
     Each call records a ``tool`` step with its arguments, result or error and
-    duration. Outside an agenttest run the decorator is transparent.
+    duration, and honours any active ``mock_tool_*`` for the tool's name.
+    Outside an agenttest run nothing is recorded, but mocks still apply.
     Works on both sync and ``async`` functions.
     """
 
@@ -147,46 +203,22 @@ def tool(fn: Callable[..., Any] | None = None, /, *, name: str | None = None) ->
         except (TypeError, ValueError):
             sig = None
 
-        def record(call_input: Any, start: float, *, output: Any = None, error: BaseException | None = None) -> None:
-            record_step(
-                "tool",
-                tool_name,
-                input=call_input,
-                output=output,
-                error=f"{type(error).__name__}: {error}" if error is not None else None,
-                duration_ms=(time.perf_counter() - start) * 1000,
-            )
-
         if inspect.iscoroutinefunction(func):
 
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                if current_trace() is None:
-                    return await func(*args, **kwargs)
-                start, call_input = time.perf_counter(), _describe_call(sig, args, kwargs)
-                try:
-                    result = await func(*args, **kwargs)
-                except Exception as exc:
-                    record(call_input, start, error=exc)
-                    raise
-                record(call_input, start, output=result)
-                return result
+                return await arun_tool(
+                    tool_name, functools.partial(func, *args, **kwargs), input=_describe_call(sig, args, kwargs)
+                )
 
             wrapper: Callable[..., Any] = async_wrapper
         else:
 
             @functools.wraps(func)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-                if current_trace() is None:
-                    return func(*args, **kwargs)
-                start, call_input = time.perf_counter(), _describe_call(sig, args, kwargs)
-                try:
-                    result = func(*args, **kwargs)
-                except Exception as exc:
-                    record(call_input, start, error=exc)
-                    raise
-                record(call_input, start, output=result)
-                return result
+                return run_tool(
+                    tool_name, functools.partial(func, *args, **kwargs), input=_describe_call(sig, args, kwargs)
+                )
 
             wrapper = sync_wrapper
 

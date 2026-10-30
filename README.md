@@ -97,7 +97,7 @@ pytest
 
 ## 🔍 Structural Assertions (No API Key Needed)
 
-Pure Python assertions that evaluate speed, output structure, token count, and tool usage without touching the network:
+Pure Python assertions that evaluate speed, output structure, token count, and tool usage without touching the network. Each one raises `AssertionError` with the expected value, the actual value and an excerpt of the output; each accepts an `AgentResult` or the raw value. Bool versions without the `assert_` prefix live in `agenttest.assertions`.
 
 1. `assert_word_count_between(output, min_count, max_count)` — Verify word counts within inclusive limits.
 2. `assert_steps_at_most(steps_taken, max_steps)` — Cap maximum execution steps.
@@ -114,10 +114,10 @@ Pure Python assertions that evaluate speed, output structure, token count, and t
 
 ## 🤖 Semantic Assertions (Judge Model Required)
 
-LLM-judged assertions powered by your configured judge provider:
+LLM-judged assertions powered by your configured judge provider. They raise `AssertionError` including the judge's answer; a judge reply that cannot be parsed raises `AgentTestJudgeError` instead of being guessed at.
 
 1. `assert_contains_fact(output, "Paris")` — Fact verification.
-2. `assert_hallucination_score(output) < 0.1` — Hallucination likelihood rating (0.0 to 1.0).
+2. `assert_hallucination_score(output, max_score=0.1)` — Hallucination likelihood rating (0.0 to 1.0) at most `max_score`.
 3. `assert_tone_matches(output, "professional")` — Tone and style checking.
 4. `assert_answers_question(output, "What is Python?")` — Question coverage evaluation.
 5. `assert_language_matches(output, "Spanish")` — Target language detection.
@@ -126,23 +126,44 @@ LLM-judged assertions powered by your configured judge provider:
 
 ## 🧪 Tool Mocking
 
-Simulate real-world tool failures, custom mock responses, and network delays in tests:
+Simulate tool failures, canned responses and network delays. Mocks match tools by name and apply to
+`@agenttest.tool` functions, LangChain/LangGraph tools, OpenAI Agents SDK function tools and CrewAI tools:
 
 ```python
+import agenttest
 from agenttest import mock_tool_failure, mock_tool_response, mock_tool_latency
 
-# Mock tool exception
-with mock_tool_failure("web_search", error_message="503 Service Unavailable"):
-    agent.run("Fetch latest weather")
+# Make the tool fail (the framework handles it exactly like a real failure)
+with mock_tool_failure("web_search", "503 Service Unavailable", exception=ConnectionError) as handle:
+    result = agenttest.run(agent, "Fetch latest weather")
+assert handle.calls == 1          # catches mocks whose name never matched
+assert result.gracefully_degraded
 
-# Mock custom data return
+# Return canned data instead of running the tool
 with mock_tool_response("calculator", {"result": 42}):
-    agent.run("Calculate 6 * 7")
+    agenttest.run(agent, "Calculate 6 * 7")
 
-# Inject network delay (milliseconds)
+# Delay the real tool (milliseconds)
 with mock_tool_latency("database_query", delay_ms=500):
-    agent.run("Fetch user record")
+    agenttest.run(agent, "Fetch user record")
 ```
+
+---
+
+## 🔁 Retries and Pass Rates
+
+Agents are non-deterministic. Run a test several times and require a pass rate, optionally retrying failed runs:
+
+```python
+@agent_test(runs=5, min_pass_rate=0.8, max_retries=1)
+def test_agent_answers_correctly():
+    result = agenttest.run(my_agent, "What is the capital of France?")
+    assert_output_contains(result, "Paris")
+```
+
+Execution stops as soon as the verdict is certain. Tests that pass only after retries or with some failed
+runs emit `AgentTestFlakyWarning` and are listed in the agenttest summary. `runs`, `min_pass_rate` and
+`max_retries` can also be set project-wide in `agenttest.config.json`.
 
 ---
 

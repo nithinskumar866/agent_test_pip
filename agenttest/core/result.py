@@ -5,13 +5,12 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import threading
 from typing import Any, Final
 
 from pydantic import BaseModel, Field, PrivateAttr
 
-from agenttest.config import AgentTestConfigError, AgentTestError, AgentTestJudgeError, _load_config
+from agenttest.config import AgentTestConfigError, AgentTestError, _load_config
 from agenttest.core.trace import Trace
 
 __all__ = ["AgentResult", "DEFAULT_JUDGE_MODEL", "_judge_llm", "_clear_judge_cache"]
@@ -21,8 +20,6 @@ DEFAULT_JUDGE_MODEL: Final[str] = "claude-haiku-4-5-20251001"
 _JUDGE_CACHE: dict[str, str] = {}
 _CACHE_LOCK: Final[threading.Lock] = threading.Lock()
 _JUDGE_CACHE_LOCK: Final[threading.Lock] = _CACHE_LOCK
-
-_FLOAT_PATTERN: Final[re.Pattern[str]] = re.compile(r"[-+]?\d*\.\d+|[-+]?\d+")
 
 
 def _judge_llm(prompt: str) -> str:
@@ -237,49 +234,30 @@ class AgentResult(BaseModel):
         if self.error is not None:
             raise AgentTestError(self.error)
 
+    # Judge-backed checks delegate to agenttest.assertions.semantic so each
+    # prompt and its parsing live in one place (imported lazily: semantic
+    # imports this module).
+
     def contains_fact(self, claim: str) -> bool:
         """Check whether the output asserts a factual claim using an LLM judge."""
-        prompt = (
-            f"Does the following text contain the factual claim: "
-            f"'{claim}'?\n\nText: {self.output}\n\n"
-            f"Answer only YES or NO."
-        )
-        answer = _judge_llm(prompt)
-        return answer.strip().upper().startswith("YES")
+        from agenttest.assertions.semantic import contains_fact
+
+        return contains_fact(self.output, claim)
 
     @property
     def hallucination_score(self) -> float:
-        """Rate hallucination likelihood from 0.0 to 1.0."""
-        if self._hallucination_cache is not None:
-            return self._hallucination_cache
+        """Judge-rated hallucination likelihood from 0.0 to 1.0 (cached per result)."""
+        if self._hallucination_cache is None:
+            from agenttest.assertions.semantic import hallucination_score
 
-        prompt = (
-            f"Rate how likely this text contains hallucinations "
-            f"or factual inaccuracies on a scale from 0.0 (completely "
-            f"accurate) to 1.0 (severe hallucinations).\n\n"
-            f"Text: {self.output}\n\n"
-            f"Return only a single float number between 0.0 and 1.0. "
-            f"Nothing else."
-        )
-        answer = _judge_llm(prompt)
-        match = _FLOAT_PATTERN.search(answer)
-        if match is None:
-            score = 0.5
-        else:
-            score = min(1.0, max(0.0, float(match.group())))
-
-        self._hallucination_cache = score
-        return score
+            self._hallucination_cache = hallucination_score(self.output)
+        return self._hallucination_cache
 
     def tone_matches(self, tone: str) -> bool:
         """Check whether the output is written in a requested tone."""
-        prompt = (
-            f"Does the following text match a '{tone}' tone?\n\n"
-            f"Text: {self.output}\n\n"
-            f"Answer only YES or NO."
-        )
-        answer = _judge_llm(prompt)
-        return answer.strip().upper().startswith("YES")
+        from agenttest.assertions.semantic import tone_matches
+
+        return tone_matches(self.output, tone)
 
     def word_count_between(self, min_count: int, max_count: int) -> bool:
         """Check the output's word count against an inclusive range."""

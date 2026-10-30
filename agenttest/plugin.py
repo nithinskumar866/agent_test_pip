@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from agenttest.core.retry import FLAKY_REPORTS
+
 __all__ = ["pytest_configure", "pytest_runtest_logreport", "pytest_terminal_summary"]
 
 #: Outcomes of ``agent``-marked tests in this session.
@@ -19,6 +21,7 @@ _outcomes: Counter[str] = Counter()
 def pytest_configure(config: Any) -> None:
     config.addinivalue_line("markers", "agent: an agenttest behavioural test (added by @agent_test)")
     _outcomes.clear()
+    FLAKY_REPORTS.clear()
 
 
 def pytest_runtest_logreport(report: Any) -> None:
@@ -38,3 +41,7 @@ def pytest_terminal_summary(terminalreporter: Any, exitstatus: Any, config: Any)
         f"Agent tests: {_outcomes['passed']} passed, {_outcomes['failed']} failed, "
         f"{_outcomes['skipped']} skipped"
     )
+    if FLAKY_REPORTS:
+        terminalreporter.write_line(f"Flaky (passed, but not on every run/attempt): {len(FLAKY_REPORTS)}")
+        for report in FLAKY_REPORTS:
+            terminalreporter.write_line(f"  {report.test_name}: {report.summary()}")

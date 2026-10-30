@@ -12,13 +12,15 @@ import json
 from pathlib import Path
 from typing import Any, Final
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 __all__ = [
     "AgentTestError",
     "AgentTestConfigError",
     "AgentTestJudgeError",
     "AgentTestTimeoutError",
+    "AgentTestPassRateError",
+    "AgentTestFlakyWarning",
     "AgentTestConfig",
     "FRAMEWORKS",
     "JUDGE_PROVIDERS",
@@ -52,6 +54,17 @@ class AgentTestTimeoutError(AgentTestError):
     """Raised (and recorded on the result) when an agent run exceeds its timeout."""
 
 
+class AgentTestPassRateError(AgentTestError, AssertionError):
+    """A multi-run agent test passed in fewer runs than its ``min_pass_rate`` requires.
+
+    Subclasses ``AssertionError`` so pytest reports it as a test failure.
+    """
+
+
+class AgentTestFlakyWarning(UserWarning):
+    """Emitted when an agent test passed only after retries or with some runs failing."""
+
+
 class AgentTestConfig(BaseModel):
     """Validated contents of ``agenttest.config.json``.
 
@@ -65,7 +78,12 @@ class AgentTestConfig(BaseModel):
     judge_provider: str = "anthropic"
     judge_model: str | None = None
     timeout: float | None = None
-    max_retries: int = 1
+    #: Extra attempts per run after a failure (0 = no retries).
+    max_retries: int = Field(default=0, ge=0)
+    #: Times each ``@agent_test`` test is executed.
+    runs: int = Field(default=1, ge=1)
+    #: Fraction of runs that must pass.
+    min_pass_rate: float = Field(default=1.0, gt=0.0, le=1.0)
 
     @field_validator("framework")
     @classmethod

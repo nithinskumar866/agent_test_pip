@@ -24,14 +24,18 @@ from agenttest.adapters.base import BaseAdapter
 from agenttest.config import (
     AgentTestConfigError,
     AgentTestError,
+    AgentTestFlakyWarning,
     AgentTestJudgeError,
+    AgentTestPassRateError,
     AgentTestTimeoutError,
 )
 from agenttest.core.decorator import agent_test
 from agenttest.core.result import AgentResult
 from agenttest.core.runner import arun, run
 from agenttest.core.trace import Step, Trace, current_trace, tool
-from agenttest.mocks.tool_failure import (
+from agenttest.mocks import (
+    MockedToolError,
+    MockHandle,
     mock_tool_failure,
     mock_tool_latency,
     mock_tool_response,
@@ -52,6 +56,10 @@ __all__ = [
     "AgentTestConfigError",
     "AgentTestJudgeError",
     "AgentTestTimeoutError",
+    "AgentTestPassRateError",
+    "AgentTestFlakyWarning",
+    "MockHandle",
+    "MockedToolError",
     "mock_tool_failure",
     "mock_tool_response",
     "mock_tool_latency",

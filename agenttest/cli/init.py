@@ -71,7 +71,7 @@ def init(framework: str | None, judge: str | None) -> None:
         "judge_provider": detected_judge,
         "judge_model": judge_model,
         "timeout": 60,
-        "max_retries": 1,
+        "max_retries": 0,
     }
 
     config_path = Path.cwd() / "agenttest.config.json"

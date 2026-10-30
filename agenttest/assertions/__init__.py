@@ -1,6 +1,11 @@
-"""Assertion functions for semantic and structural agent evaluations."""
+"""Checks for agent results.
+
+``assert_*`` functions raise ``AssertionError`` with a descriptive message;
+the same-named functions without the prefix are bool predicates.
+"""
 
 from agenttest.assertions.semantic import (
+    answers_question,
     assert_answers_question,
     assert_contains_fact,
     assert_eval_prompt,
@@ -8,6 +13,11 @@ from agenttest.assertions.semantic import (
     assert_hallucination_score_below,
     assert_language_matches,
     assert_tone_matches,
+    contains_fact,
+    hallucination_score,
+    language_matches,
+    satisfies,
+    tone_matches,
 )
 from agenttest.assertions.structural import (
     assert_gracefully_degraded,
@@ -24,9 +34,20 @@ from agenttest.assertions.structural import (
     assert_tool_was_not_called,
     assert_valid_json,
     assert_word_count_between,
+    gracefully_degraded,
+    latency_under,
+    output_contains,
+    output_is_valid_json,
+    output_matches_regex,
+    steps_at_most,
+    tokens_under,
+    tool_was_called,
+    tool_was_not_called,
+    word_count_between,
 )
 
 __all__ = [
+    # semantic assertions
     "assert_contains_fact",
     "assert_hallucination_score",
     "assert_hallucination_score_below",
@@ -34,6 +55,14 @@ __all__ = [
     "assert_answers_question",
     "assert_language_matches",
     "assert_eval_prompt",
+    # semantic predicates
+    "contains_fact",
+    "hallucination_score",
+    "tone_matches",
+    "answers_question",
+    "language_matches",
+    "satisfies",
+    # structural assertions
     "assert_word_count_between",
     "assert_steps_at_most",
     "assert_steps_taken_max",
@@ -48,4 +77,15 @@ __all__ = [
     "assert_output_is_valid_json",
     "assert_valid_json",
     "assert_gracefully_degraded",
+    # structural predicates
+    "word_count_between",
+    "steps_at_most",
+    "tool_was_called",
+    "tool_was_not_called",
+    "latency_under",
+    "tokens_under",
+    "output_contains",
+    "output_matches_regex",
+    "output_is_valid_json",
+    "gracefully_degraded",
 ]

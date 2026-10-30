@@ -40,7 +40,7 @@ class RunSettings:
     """Per-test overrides installed by ``@agent_test``."""
 
     timeout: float | None = None
-    max_retries: int = 1
+    max_retries: int = 0
     model_override: str | None = None
 
 

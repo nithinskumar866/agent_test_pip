@@ -25,7 +25,13 @@ def test_agent_test_decorator_with_params():
     def custom_test():
         return "ok"
 
-    assert custom_test._agenttest_config == {"timeout": 120, "max_retries": 3, "model_override": "judge-x"}
+    assert custom_test._agenttest_config == {
+        "timeout": 120,
+        "max_retries": 3,
+        "runs": None,
+        "min_pass_rate": None,
+        "model_override": "judge-x",
+    }
     assert custom_test() == "ok"
 
 
@@ -75,7 +81,10 @@ def test_async_test_is_supported():
     assert asyncio.run(async_test()) == 3
 
 
-@pytest.mark.parametrize("kwargs", [{"timeout": 0}, {"timeout": -1}, {"max_retries": 0}])
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"timeout": 0}, {"timeout": -1}, {"max_retries": -1}, {"runs": 0}, {"min_pass_rate": 0}, {"min_pass_rate": 1.5}],
+)
 def test_invalid_decorator_arguments(kwargs):
     with pytest.raises(ValueError):
         agent_test(**kwargs)

@@ -2,17 +2,59 @@
 
 Each task output becomes a ``node`` step named after the agent role that
 produced it; the crew's aggregate token usage is attached to the last step.
-Per-tool tracing for CrewAI arrives with the Phase 3 integration work.
+Tool calls are traced (and mocks applied) by patching CrewAI's tool classes
+for the duration of the run.
 """
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+import functools
+from contextlib import ExitStack, contextmanager
+from typing import Any, ClassVar, Iterator
+from unittest import mock
 
 from agenttest.adapters.base import BaseAdapter, call_agent
-from agenttest.core.trace import record_step
+from agenttest.core.trace import arun_tool, record_step, run_tool
 
 __all__ = ["CrewAIAdapter"]
+
+
+def _traced_invoke(original: Any) -> Any:
+    @functools.wraps(original)
+    def invoke(self: Any, input: Any = None, *args: Any, **kwargs: Any) -> Any:
+        return run_tool(self.name, lambda: original(self, input, *args, **kwargs), input=input)
+
+    return invoke
+
+
+def _traced_ainvoke(original: Any) -> Any:
+    @functools.wraps(original)
+    async def ainvoke(self: Any, input: Any = None, *args: Any, **kwargs: Any) -> Any:
+        return await arun_tool(self.name, lambda: original(self, input, *args, **kwargs), input=input)
+
+    return ainvoke
+
+
+def _defining(root: type, attr: str) -> list[type]:
+    """``root`` and its subclasses that define ``attr`` themselves."""
+    found, stack, seen = [], [root], set()
+    while stack:
+        cls = stack.pop()
+        if cls in seen:
+            continue
+        seen.add(cls)
+        if attr in cls.__dict__:
+            found.append(cls)
+        stack.extend(cls.__subclasses__())
+    return found
+
+
+def _traced_run(original: Any) -> Any:
+    @functools.wraps(original)
+    def run(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return run_tool(self.name, lambda: original(self, *args, **kwargs), input=kwargs or list(args))
+
+    return run
 
 
 class CrewAIAdapter(BaseAdapter):
@@ -23,6 +65,33 @@ class CrewAIAdapter(BaseAdapter):
     @classmethod
     def can_handle(cls, agent: Any) -> bool:
         return type(agent).__module__.startswith("crewai") and hasattr(agent, "kickoff")
+
+    @contextmanager
+    def instrument(self) -> Iterator[None]:
+        """Trace and mock every CrewAI tool call made during the run.
+
+        CrewAI's ToolUsage runs tools through ``CrewStructuredTool.invoke`` /
+        ``ainvoke``; ``BaseTool.run`` covers tools called directly.
+        """
+        targets: list[tuple[type, str, Any]] = []
+        try:
+            from crewai.tools.structured_tool import CrewStructuredTool
+
+            targets += [(CrewStructuredTool, "invoke", _traced_invoke), (CrewStructuredTool, "ainvoke", _traced_ainvoke)]
+        except ImportError:
+            pass
+        try:
+            from crewai.tools import BaseTool
+
+            # Subclasses such as crewai's own ``Tool`` override ``run``.
+            targets += [(cls, "run", _traced_run) for cls in _defining(BaseTool, "run")]
+        except ImportError:
+            pass
+
+        with ExitStack() as stack:
+            for cls, attr, make in targets:
+                stack.enter_context(mock.patch.object(cls, attr, make(getattr(cls, attr))))
+            yield
 
     def invoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
         if not hasattr(agent, "kickoff"):
