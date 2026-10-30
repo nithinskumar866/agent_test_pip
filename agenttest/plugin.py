@@ -20,7 +20,8 @@ import asyncio
 import inspect
 import time
 from collections import Counter
-from typing import Any, Iterator
+from collections.abc import Generator, Iterator
+from typing import Any
 
 import pytest
 
@@ -81,7 +82,7 @@ def pytest_runtest_protocol(item: Any, nextitem: Any) -> Iterator[None]:
 
 
 @pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item: Any, call: Any) -> Iterator[None]:
+def pytest_runtest_makereport(item: Any, call: Any) -> Generator[None, Any, None]:
     outcome = yield
     report = outcome.get_result()
     if report.when != "call" or not report.failed or item.config.getoption("agenttest_no_trace"):

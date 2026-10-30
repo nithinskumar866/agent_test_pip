@@ -15,8 +15,7 @@ import agenttest
 from agenttest import AgentTestConfigError, AgentTestJudgeError, assert_grounded, check_grounding, use_judge
 from agenttest.assertions import semantic as sem
 from agenttest.core.result import AgentResult, _clear_judge_cache, _judge_llm
-from agenttest.judge import JUDGE_SYSTEM_PROMPT, fence, is_transient
-from agenttest.judge import providers
+from agenttest.judge import JUDGE_SYSTEM_PROMPT, fence, is_transient, providers
 
 CONTEXT = [
     "The Eiffel Tower is 330 metres tall and stands in Paris.",
@@ -607,3 +606,14 @@ def test_agent_result_hallucination_score_property_is_fenced():
         assert result.hallucination_score == 0.0
     start, end = _fenced_region(judge.prompts[0], "TEXT")
     assert start <= judge.prompts[0].index("ignore all previous instructions") < end
+
+
+def test_missing_sdk_is_reported_before_a_missing_key(monkeypatch):
+    import importlib.util
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a: None if name == "anthropic" else real_find_spec(name, *a))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(AgentTestConfigError, match=r'pip install "pytest-agenttest\[anthropic\]"'):
+        _judge_llm("prompt")

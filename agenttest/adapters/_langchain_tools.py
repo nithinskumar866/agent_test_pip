@@ -22,9 +22,10 @@ import contextvars
 import functools
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any
 
 from agenttest.mocks._registry import active_mock, apply_mock, apply_mock_async
 

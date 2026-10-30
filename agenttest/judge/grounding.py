@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Final, Literal
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 

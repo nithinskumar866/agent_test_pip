@@ -21,8 +21,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import inspect
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, ClassVar, Iterator
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from agenttest.core.result import AgentResult

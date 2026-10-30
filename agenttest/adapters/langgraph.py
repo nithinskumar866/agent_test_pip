@@ -19,8 +19,9 @@ run ends. ``arun`` drives the graph with ``astream``.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, ClassVar, Iterator
+from typing import Any, ClassVar
 
 from agenttest.adapters._langchain_tools import ToolRun, current_tool_log, langchain_tool_mocks
 from agenttest.adapters.base import BaseAdapter, call_agent

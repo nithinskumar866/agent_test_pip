@@ -30,8 +30,9 @@ import hashlib
 import json
 import re
 import threading
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Any, Callable, Final, Iterator, TypeVar
+from typing import Any, Final, TypeVar
 
 from agenttest.config import AgentTestJudgeError
 

@@ -14,9 +14,10 @@ from __future__ import annotations
 import functools
 import inspect
 import time
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Awaitable, Callable, Iterator, Literal, TypeVar, overload
+from typing import Any, Literal, TypeVar, overload
 
 from pydantic import BaseModel, Field
 

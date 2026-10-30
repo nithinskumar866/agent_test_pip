@@ -20,9 +20,11 @@ The SDK clients' own retries are switched off so attempts are not multiplied.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import time
-from typing import Any, Callable, Final
+from collections.abc import Callable
+from typing import Any, Final
 
 from agenttest.config import AgentTestConfigError, AgentTestJudgeError
 
@@ -55,6 +57,12 @@ def is_transient(exc: BaseException) -> bool:
     return any(word in cls.__name__.lower() for cls in type(exc).__mro__ for word in _TRANSIENT_NAMES)
 
 
+def _require_package(module: str, extra: str) -> None:
+    """Report a missing SDK before a missing API key: installing comes first."""
+    if importlib.util.find_spec(module) is None:
+        raise AgentTestConfigError(f'{module} package not installed. Run: pip install "pytest-agenttest[{extra}]"')
+
+
 def _require_key(env_var: str) -> str:
     api_key = os.getenv(env_var)
     if not api_key:
@@ -71,11 +79,14 @@ def _anthropic_client(api_key: str, timeout: float) -> Any:
     try:
         import anthropic
     except ImportError:
-        raise AgentTestConfigError("anthropic package not installed. Run: pip install anthropic") from None
+        raise AgentTestConfigError(
+            'anthropic package not installed. Run: pip install "pytest-agenttest[anthropic]"'
+        ) from None
     return anthropic.Anthropic(api_key=api_key, timeout=timeout, max_retries=0)
 
 
 def _call_anthropic(prompt: str, system: str, model: str, max_tokens: int, timeout: float) -> str:
+    _require_package("anthropic", "anthropic")
     client = _anthropic_client(_require_key("ANTHROPIC_API_KEY"), timeout)
     response = client.messages.create(
         model=model,
@@ -94,11 +105,14 @@ def _openai_client(api_key: str, timeout: float) -> Any:
     try:
         import openai
     except ImportError:
-        raise AgentTestConfigError("openai package not installed. Run: pip install openai") from None
+        raise AgentTestConfigError(
+            'openai package not installed. Run: pip install "pytest-agenttest[openai]"'
+        ) from None
     return openai.OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
 
 
 def _call_openai(prompt: str, system: str, model: str, max_tokens: int, timeout: float) -> str:
+    _require_package("openai", "openai")
     client = _openai_client(_require_key("OPENAI_API_KEY"), timeout)
     response = client.chat.completions.create(
         model=model,
@@ -114,7 +128,7 @@ def _call_gemini(prompt: str, system: str, model: str, max_tokens: int, timeout:
         import google.generativeai as genai
     except ImportError:
         raise AgentTestConfigError(
-            "google-generativeai not installed. Run: pip install google-generativeai"
+            "google-generativeai not installed. Run: pip install \"pytest-agenttest[gemini]\""
         ) from None
     genai.configure(api_key=_require_key("GOOGLE_API_KEY"))
     gemini_model = genai.GenerativeModel(model, system_instruction=system)
@@ -130,7 +144,7 @@ def _call_ollama(prompt: str, system: str, model: str, max_tokens: int, timeout:
     try:
         import httpx
     except ImportError:
-        raise AgentTestConfigError("httpx not installed. Run: pip install httpx") from None
+        raise AgentTestConfigError("httpx not installed. Run: pip install \"pytest-agenttest[ollama]\"") from None
     try:
         response = httpx.post(
             "http://localhost:11434/api/generate",

@@ -174,6 +174,7 @@ def _scripted_model():
 
 
 def _weather_agent(**tool_kwargs: Any):
+    pytest.importorskip("agents")
     from agents import Agent, function_tool, set_tracing_disabled
 
     set_tracing_disabled(True)

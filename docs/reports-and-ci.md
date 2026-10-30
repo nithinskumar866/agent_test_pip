@@ -65,7 +65,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install agenttest -r requirements.txt
+      - run: pip install "pytest-agenttest[anthropic]" -r requirements.txt
       - run: agenttest doctor
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

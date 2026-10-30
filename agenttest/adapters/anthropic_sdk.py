@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import functools
 import time
+from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from typing import Any, ClassVar, Iterator
+from typing import Any, ClassVar
 from unittest import mock
 
 from agenttest.adapters.base import BaseAdapter, text_of

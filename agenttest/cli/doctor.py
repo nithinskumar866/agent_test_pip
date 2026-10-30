@@ -23,6 +23,7 @@ _FRAMEWORK_PACKAGES = {
     "openai": "agents",
     "anthropic": "anthropic",
 }
+_EXTRAS = {"langgraph": "langgraph", "crewai": "crewai", "openai": "openai-agents", "anthropic": "anthropic"}
 _JUDGE_REQUIREMENTS = {
     "anthropic": ("anthropic", "ANTHROPIC_API_KEY"),
     "openai": ("openai", "OPENAI_API_KEY"),
@@ -72,7 +73,8 @@ def run_checks(directory: Path | None = None) -> list[Check]:
     else:
         found = _installed(package)
         checks.append(Check("framework", "ok" if found else "fail",
-                            f"{framework}" + ("" if found else f" - package '{package}' is not installed")))
+                            f"{framework}" + ("" if found else f" - package '{package}' is not installed "
+                                              f'(pip install "pytest-agenttest[{_EXTRAS[framework]}]")')))
 
     installed = [name for name, pkg in _FRAMEWORK_PACKAGES.items() if _installed(pkg)]
     checks.append(Check("installed SDKs", "ok", ", ".join(installed) or "none"))

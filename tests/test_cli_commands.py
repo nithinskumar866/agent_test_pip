@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 import agenttest
 from agenttest.cli.init import main
+from tests._plugin_args import plugin_args
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -23,7 +24,7 @@ def run_pytest(*paths, cwd=None):
     """
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(REPO), os.environ.get("PYTHONPATH")]))}
     return subprocess.run(
-        [sys.executable, "-m", "pytest", *map(str, paths), "-q", "-p", "agenttest.plugin", "-p", "no:cacheprovider"],
+        [sys.executable, "-m", "pytest", *map(str, paths), "-q", *plugin_args(), "-p", "no:cacheprovider"],
         capture_output=True, text=True, cwd=cwd, env=env, timeout=300,
     )
 

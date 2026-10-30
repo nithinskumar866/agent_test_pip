@@ -16,13 +16,14 @@ thunk that runs the real tool.
 from __future__ import annotations
 
 import asyncio
+import builtins
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Literal
 
 __all__ = [
     "MOCK_REGISTRY",
@@ -55,7 +56,8 @@ class MockHandle:
     tool_name: str
     type: MockType
     error: str | None = None
-    exception: BaseException | type[BaseException] | None = None
+    # builtins.type: the field named ``type`` shadows the builtin in this class body.
+    exception: BaseException | builtins.type[BaseException] | None = None
     data: Any = None
     delay: float = 0.0
     calls: int = 0

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import click
 from rich.console import Console
@@ -205,7 +204,7 @@ def _detect_framework() -> str:
         if f.exists():
             try:
                 all_deps += f.read_text(encoding="utf-8").lower() + "\n"
-            except Exception:
+            except Exception:  # noqa: S110 - an unreadable file just doesn't count
                 pass
 
     if "langgraph" in all_deps:
@@ -248,7 +247,7 @@ def _detect_judge_provider() -> str:
 
         httpx.get("http://localhost:11434", timeout=2.0)
         return "ollama"
-    except Exception:
+    except Exception:  # noqa: S110 - no local Ollama server
         pass
 
     return "none"

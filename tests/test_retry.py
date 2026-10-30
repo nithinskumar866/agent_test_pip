@@ -53,7 +53,8 @@ def test_retries_exhausted_reraises_last_error_with_note():
     with pytest.raises(AssertionError, match="failure #3") as exc_info:
         agent_test(max_retries=2)(body)()
     assert calls["n"] == 3
-    assert "agenttest: failed on all 3 attempts" in exc_info.value.__notes__
+    if hasattr(exc_info.value, "add_note"):  # exception notes need Python 3.11+
+        assert "agenttest: failed on all 3 attempts" in exc_info.value.__notes__
 
 
 def test_pass_rate_met_with_some_failures_warns():

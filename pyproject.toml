@@ -1,7 +1,113 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+# "agenttest" on PyPI belongs to an unrelated project, so the distribution is
+# published as pytest-agenttest; the import name and the CLI stay `agenttest`.
+name = "pytest-agenttest"
+dynamic = ["version"]
+description = "pytest for AI agents: tracing, tool mocking, grounded hallucination checks and pass-rate testing"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "nithinskumar866" }]
+keywords = ["pytest", "testing", "ai-agents", "llm", "langgraph", "crewai", "openai-agents", "anthropic", "evaluation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+# Only what every user needs. Judge providers and agent frameworks are extras:
+# each is imported lazily, with an install hint when it is missing.
+dependencies = [
+    "pytest>=7.0",
+    "pydantic>=2.0,<3",
+    "click>=8.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+# Judge providers
+anthropic = ["anthropic>=0.40"]
+openai = ["openai>=1.0"]
+gemini = ["google-generativeai>=0.5"]
+ollama = ["httpx>=0.24"]
+# Agent frameworks
+langgraph = ["langgraph>=0.2"]
+crewai = ["crewai>=0.80"]
+openai-agents = ["openai-agents>=0.1"]
+all = ["pytest-agenttest[anthropic,openai,gemini,ollama,langgraph,crewai,openai-agents]"]
+# Development
+dev = [
+    "pytest-agenttest[anthropic,openai,ollama]",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "build>=1.2",
+    "twine>=5.0",
+    "pip-audit>=2.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/nithinskumar866/agent_test_pip"
+Documentation = "https://github.com/nithinskumar866/agent_test_pip/tree/main/docs"
+Changelog = "https://github.com/nithinskumar866/agent_test_pip/blob/main/CHANGELOG.md"
+Issues = "https://github.com/nithinskumar866/agent_test_pip/issues"
+
+[project.scripts]
+agenttest = "agenttest.cli.init:main"
+
+[project.entry-points.pytest11]
+agenttest = "agenttest.plugin"
+
+[tool.setuptools.dynamic]
+version = { attr = "agenttest.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["agenttest", "agenttest.*"]
+
+[tool.setuptools.package-data]
+agenttest = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = ["agent: an agenttest behavioural test (added by @agent_test)"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["agenttest_build_prompt.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
+ignore = [
+    "S101",    # assert is how tests (and this library's users) check things
+    "B008",    # function calls in defaults
+    "RUF001", "RUF002", "RUF003",  # intentional unicode in strings and docs
+    "SIM105",  # contextlib.suppress is not clearer here
+    "RUF022",  # __all__ lists are grouped by meaning, not sorted
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B", "SIM", "C4", "E402", "E501", "RUF012", "RUF043"]
+"examples/**" = ["S"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["agenttest"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true

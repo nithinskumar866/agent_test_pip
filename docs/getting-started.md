@@ -3,10 +3,21 @@
 ## Install
 
 ```bash
-pip install agenttest
+pip install "pytest-agenttest[anthropic]"
 ```
 
-agenttest needs Python 3.10+. It is a pytest plugin: once installed, `pytest` loads it automatically.
+The distribution is called `pytest-agenttest`; the module is `agenttest` and so is the command. It needs
+Python 3.10+ and is a pytest plugin: once installed, `pytest` loads it automatically.
+
+The core install includes no model SDK. Pick extras for what you use:
+
+| Extra | Installs | For |
+| :--- | :--- | :--- |
+| `anthropic`, `openai`, `gemini`, `ollama` | the provider SDK (httpx for Ollama) | the judge |
+| `langgraph`, `crewai`, `openai-agents` | the framework | testing agents built with it |
+| `all` | everything above | |
+
+Structural assertions, tool mocking, reports and `use_judge` scripted judges need no extra at all.
 
 ## Set up a project
 

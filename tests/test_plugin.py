@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._plugin_args import plugin_args
+
 pytest_plugins = ["pytester"]
 
 REPO = Path(__file__).resolve().parents[1]
@@ -63,7 +65,7 @@ def test_plain_test_without_agent_runs():
 
 def run_session(pytester, source, *args):
     pytester.makepyfile(test_agents=source)
-    return pytester.runpytest_subprocess("-p", "agenttest.plugin", "-p", "no:cacheprovider", *args)
+    return pytester.runpytest_subprocess(*plugin_args(), "-p", "no:cacheprovider", *args)
 
 
 def test_summary_counts_agent_tests_and_runs(pytester):

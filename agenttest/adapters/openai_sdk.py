@@ -23,8 +23,9 @@ Any other agent (a function wrapping the SDK, for example) is called as-is.
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, ClassVar, Iterator
+from typing import Any, ClassVar
 
 from agenttest.adapters.base import BaseAdapter, call_agent, text_of
 from agenttest.core.trace import record_step
@@ -171,7 +172,8 @@ def _wrap_invoke(tool: Any, original: Any, failures: dict[str, list[tuple[str, s
             if handle is None or handle.type != "failure":
                 raise  # a real tool error: the SDK handles it as it normally would
             call_id = getattr(ctx, "tool_call_id", None)
-            failures.setdefault(call_id if call_id else f"name:{name}", []).append((name, f"{type(exc).__name__}: {exc}"))
+            key = call_id if call_id else f"name:{name}"
+            failures.setdefault(key, []).append((name, f"{type(exc).__name__}: {exc}"))
             return await _handle_mocked_failure(tool, ctx, exc)
 
     on_invoke_tool._agenttest_mock_wrapper = True  # type: ignore[attr-defined]

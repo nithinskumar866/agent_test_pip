@@ -217,7 +217,8 @@ h1{font-size:1.5rem;margin:0 0 .25rem} .muted{color:#656d76}
 .tiles{display:flex;gap:.75rem;flex-wrap:wrap;margin:1rem 0}
 .tile{border:1px solid #d0d7de;border-radius:6px;padding:.5rem .9rem;min-width:7rem}
 .tile b{display:block;font-size:1.3rem}
-table{border-collapse:collapse;width:100%} th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #d0d7de;vertical-align:top}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #d0d7de;vertical-align:top}
 .passed{color:#1a7f37} .failed{color:#cf222e} .skipped{color:#9a6700}
 details{margin:.25rem 0} summary{cursor:pointer}
 pre{background:#f6f8fa;padding:.6rem;border-radius:6px;overflow:auto;white-space:pre-wrap;margin:.4rem 0}

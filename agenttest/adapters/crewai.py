@@ -10,8 +10,9 @@ back to ``kickoff_async`` on older CrewAI).
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from typing import Any, ClassVar, Iterator
+from typing import Any, ClassVar
 from unittest import mock
 
 from agenttest.adapters.base import BaseAdapter, call_agent
@@ -86,7 +87,10 @@ class CrewAIAdapter(BaseAdapter):
         try:
             from crewai.tools.structured_tool import CrewStructuredTool
 
-            targets += [(CrewStructuredTool, "invoke", _traced_invoke), (CrewStructuredTool, "ainvoke", _traced_ainvoke)]
+            targets += [
+                (CrewStructuredTool, "invoke", _traced_invoke),
+                (CrewStructuredTool, "ainvoke", _traced_ainvoke),
+            ]
         except ImportError:
             pass
         try:

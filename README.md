@@ -1,6 +1,6 @@
 # agenttest
 
-![PyPI version](https://badge.fury.io/py/agenttest.svg)
+[![CI](https://github.com/nithinskumar866/agent_test_pip/actions/workflows/ci.yml/badge.svg)](https://github.com/nithinskumar866/agent_test_pip/actions/workflows/ci.yml)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![License MIT](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -14,10 +14,13 @@ answers against the context the agent was given, and judges flaky behaviour stat
 ## Install
 
 ```bash
-pip install agenttest
+pip install "pytest-agenttest[anthropic]"   # or [openai], [gemini], [ollama]: the judge provider you use
 agenttest init --example     # write agenttest.config.json and a runnable example test
 agenttest doctor             # check the config, framework packages and judge API key
 ```
+
+The package is published as `pytest-agenttest`; you `import agenttest` and run the `agenttest`
+command. Add `[langgraph]`, `[crewai]` or `[openai-agents]` for those frameworks, or `[all]`.
 
 ## Quick start
 
@@ -95,6 +98,7 @@ and limitations are in [docs/frameworks.md](docs/frameworks.md).
 - [Tool mocking](docs/mocking.md)
 - [Reports, the CLI and CI](docs/reports-and-ci.md), including the configuration reference
 - Runnable [examples](examples/)
+- [Releasing](docs/releasing.md) and [security](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
 ## Contributing
@@ -104,9 +108,12 @@ Contributions are welcome. Open an issue or a pull request on GitHub.
 ```bash
 git clone https://github.com/nithinskumar866/agent_test_pip.git
 cd agent_test_pip
-pip install -e . langgraph crewai openai-agents   # the SDKs are optional; their tests skip without them
-pytest
+pip install -e ".[dev]"          # add ,all to also run the framework integration tests
+ruff check . && mypy && pytest
 ```
+
+See [docs/releasing.md](docs/releasing.md) for how releases are built and published, and
+[SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## License
 

@@ -22,9 +22,10 @@ import contextvars
 import inspect
 import time
 import traceback as tb
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any
 
 from agenttest.adapters import BaseAdapter, resolve_adapter
 from agenttest.config import AgentTestError, AgentTestTimeoutError, load_config

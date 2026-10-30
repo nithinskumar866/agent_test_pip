@@ -7,5 +7,6 @@
 5. [The judge and grounded hallucination checks](judge.md): providers, reliability, limitations.
 6. [Tool mocking](mocking.md): failures, canned responses and latency.
 7. [Reports, the CLI and CI](reports-and-ci.md): the summary, failure traces, JSON/HTML reports, configuration.
+8. [Releasing](releasing.md): packaging and publishing to PyPI.
 
 Runnable examples are in [`examples/`](../examples). The test suite runs them, so they stay correct.

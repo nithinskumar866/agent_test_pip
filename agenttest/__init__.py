@@ -1,6 +1,7 @@
 """agenttest — pytest-style behavioral testing framework for AI agent pipelines.
 """
 
+from agenttest.adapters.base import BaseAdapter
 from agenttest.assertions.semantic import (
     assert_answers_question,
     assert_contains_fact,
@@ -22,7 +23,6 @@ from agenttest.assertions.structural import (
     assert_tool_was_not_called,
     assert_word_count_between,
 )
-from agenttest.adapters.base import BaseAdapter
 from agenttest.config import (
     AgentTestConfigError,
     AgentTestError,
@@ -44,7 +44,7 @@ from agenttest.mocks import (
     mock_tool_response,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "run",
     "arun",

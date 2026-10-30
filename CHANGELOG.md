@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased: the rework
+## 0.2.0 (unreleased): the rework
+
+### Packaging and release
+- Published as **`pytest-agenttest`** (the PyPI name `agenttest` belongs to another project). The import
+  name and the `agenttest` command are unchanged.
+- Packaging moved to `pyproject.toml` alone; `setup.cfg` is gone. Added a `LICENSE` file and a
+  `py.typed` marker.
+- The core install needs only pytest, pydantic, click and rich. Judge providers and frameworks are
+  extras (`[anthropic]`, `[openai]`, `[gemini]`, `[ollama]`, `[langgraph]`, `[crewai]`,
+  `[openai-agents]`, `[all]`, `[dev]`), and a missing one is reported with the `pip install` command.
+- CI: ruff and mypy, tests on Python 3.10-3.13 (Linux, plus Windows and macOS), real-SDK integration
+  tests, a wheel-install check that runs the examples, and `pip-audit`. Dependabot is configured.
+- Releases are published with PyPI trusted publishing from a tag, after a TestPyPI rehearsal; the
+  previous workflow's stored API token is no longer used. See `docs/releasing.md` and `SECURITY.md`.
 
 ### Developer experience
 - pytest plugin: a failing agent test shows a trace of every agent run it made (`--agenttest-no-trace`
