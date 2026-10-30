@@ -1,96 +1,82 @@
-"""OpenAI SDK adapter — production trace capture for OpenAI SDK / Agents calls.
+"""OpenAI Agents SDK adapter.
+
+An ``agents.Agent`` is not callable — it is run with ``Runner.run`` /
+``Runner.run_sync``. The adapter does that, then reads the run result:
+``new_items`` gives tool calls and their outputs, ``raw_responses`` gives one
+``llm`` step per model response with its token usage.
+
+Any other agent (a function wrapping the SDK, for example) is called as-is.
 """
 
 from __future__ import annotations
 
-import functools
-import inspect
-from typing import Any
+from typing import Any, ClassVar
 
-from agenttest.adapters.base import BaseAdapter
-from agenttest.core.result import AgentResult
+from agenttest.adapters.base import BaseAdapter, call_agent, text_of
+from agenttest.core.trace import record_step
 
 __all__ = ["OpenAIAdapter"]
 
 
+def _item_type(item: Any) -> str | None:
+    return getattr(item, "type", None)
+
+
+def _record_run(result: Any) -> None:
+    for response in getattr(result, "raw_responses", None) or []:
+        usage = getattr(response, "usage", None)
+        record_step(
+            "llm",
+            "model_response",
+            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            metadata={"response_id": getattr(response, "response_id", None)},
+        )
+
+    pending: dict[str, Any] = {}
+    for item in getattr(result, "new_items", None) or []:
+        raw = getattr(item, "raw_item", None)
+        if _item_type(item) == "tool_call_item":
+            call_id = getattr(raw, "call_id", None) or getattr(raw, "id", None)
+            step = record_step(
+                "tool",
+                getattr(raw, "name", None) or "unknown",
+                input=getattr(raw, "arguments", None),
+                metadata={"call_id": call_id},
+            )
+            if call_id and step is not None:
+                pending[call_id] = step
+        elif _item_type(item) == "tool_call_output_item":
+            call_id = raw.get("call_id") if isinstance(raw, dict) else getattr(raw, "call_id", None)
+            step = pending.get(call_id) if call_id else None
+            if step is not None:
+                step.output = getattr(item, "output", None)
+
+
 class OpenAIAdapter(BaseAdapter):
-    """Adapter for OpenAI SDK agents and response generation."""
+    """Adapter for OpenAI Agents SDK agents."""
 
-    def __init__(self) -> None:
-        self._trace: list[dict[str, Any]] = []
+    name: ClassVar[str] = "openai"
 
-    def wrap(self, agent: Any) -> Any:
-        original_run = getattr(agent, "run", agent)
+    @classmethod
+    def can_handle(cls, agent: Any) -> bool:
+        module = type(agent).__module__
+        return (module == "agents" or module.startswith("agents.")) and hasattr(agent, "instructions")
 
-        if inspect.iscoroutinefunction(original_run):
-            @functools.wraps(original_run)
-            async def patched_run(input_text: Any, **kwargs: Any):
-                result = await original_run(input_text, **kwargs)
-                for event in getattr(result, "events", []):
-                    if hasattr(event, "tool_calls"):
-                        for tc in getattr(event, "tool_calls", []):
-                            fn = getattr(tc, "function", None)
-                            self._trace.append({
-                                "tool": getattr(fn, "name", "unknown"),
-                                "input": getattr(fn, "arguments", ""),
-                                "output": "",
-                            })
-                final_out = getattr(result, "final_output", str(result))
-                self._trace.append({
-                    "agent": getattr(agent, "name", "agent"),
-                    "output": str(final_out),
-                })
-                return result
+    def invoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
+        if not self.can_handle(agent):
+            return call_agent(agent, *args, **kwargs)
 
-            if hasattr(agent, "run"):
-                agent.run = patched_run
-                return agent
-            return patched_run
-        else:
-            @functools.wraps(original_run)
-            def patched_run_sync(*args: Any, **kwargs: Any):
-                result = original_run(*args, **kwargs)
-                if hasattr(result, "events"):
-                    for event in getattr(result, "events", []):
-                        if hasattr(event, "tool_calls"):
-                            for tc in getattr(event, "tool_calls", []):
-                                fn = getattr(tc, "function", None)
-                                self._trace.append({
-                                    "tool": getattr(fn, "name", "unknown"),
-                                    "input": getattr(fn, "arguments", ""),
-                                    "output": "",
-                                })
-                final_out = getattr(result, "final_output", str(result))
-                self._trace.append({
-                    "agent": getattr(agent, "name", "agent"),
-                    "output": str(final_out),
-                })
-                return result
+        # The engine never calls invoke() on a running event loop (arun uses a
+        # worker thread), so run_sync is always safe here.
+        from agents import Runner
 
-            if hasattr(agent, "run"):
-                agent.run = patched_run_sync
-                return agent
-            return patched_run_sync
+        result = Runner.run_sync(agent, *args, **kwargs)
+        _record_run(result)
+        return result
 
-    def capture_trace(self) -> dict[str, Any]:
-        return {"steps": self._trace}
-
-    def build_result(self, trace: dict[str, Any], latency_ms: float) -> AgentResult:
-        steps = trace.get("steps", [])
-        tools_called = [
-            s["tool"] for s in steps if "tool" in s
-        ]
-        agent_steps = [s for s in steps if "agent" in s]
-        final_output = (
-            agent_steps[-1]["output"] if agent_steps else (steps[-1]["output"] if steps else "")
-        )
-        return AgentResult(
-            success=True,
-            output=final_output,
-            steps_taken=len(steps),
-            tools_called=tools_called,
-            tokens_used=0,
-            latency_ms=latency_ms,
-            gracefully_degraded=False,
-            raw_trace=trace,
-        )
+    def extract_output(self, raw: Any) -> str:
+        final = getattr(raw, "final_output", None)
+        if final is not None:
+            return final if isinstance(final, str) else str(final)
+        return text_of(raw)

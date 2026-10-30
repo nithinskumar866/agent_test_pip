@@ -1,41 +1,40 @@
 """Pytest plugin entry point for agenttest.
 
-Registered via the ``pytest11`` entry point in setup.cfg, which means pytest
-loads this module automatically for any project that has agenttest installed.
+Registered via the ``pytest11`` entry point in setup.cfg, so pytest loads it
+automatically wherever agenttest is installed. Collection is left entirely to
+pytest — agent tests are ordinary test functions carrying the ``agent`` marker.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
-import pytest
+__all__ = ["pytest_configure", "pytest_runtest_logreport", "pytest_terminal_summary"]
 
-__all__ = [
-    "pytest_collect_file",
-    "pytest_runtest_call",
-    "pytest_terminal_summary",
-]
+#: Outcomes of ``agent``-marked tests in this session.
+_outcomes: Counter[str] = Counter()
 
 
-def pytest_collect_file(parent: Any, file_path: Any) -> Any:
-    """Tell pytest to collect our test files."""
-    if getattr(file_path, "suffix", None) == ".py" and getattr(file_path, "name", "").startswith("test_"):
-        return pytest.Module.from_parent(parent, path=file_path)
-    return None
+def pytest_configure(config: Any) -> None:
+    config.addinivalue_line("markers", "agent: an agenttest behavioural test (added by @agent_test)")
+    _outcomes.clear()
 
 
-def pytest_runtest_call(item: Any) -> None:
-    """Hook into each test call.
-
-    If the test function has _is_agent_test=True, handle it specially if needed.
-    """
-    pass
+def pytest_runtest_logreport(report: Any) -> None:
+    """Count each ``agent``-marked test once: its call outcome, or a setup failure/skip."""
+    if "agent" not in report.keywords:
+        return
+    if report.when == "call" or (report.when == "setup" and not report.passed):
+        _outcomes[report.outcome] += 1
 
 
 def pytest_terminal_summary(terminalreporter: Any, exitstatus: Any, config: Any) -> None:
-    """Add agenttest summary to pytest output."""
-    passed = len(terminalreporter.stats.get("passed", []))
-    failed = len(terminalreporter.stats.get("failed", []))
-    if passed + failed > 0:
-        terminalreporter.write_sep("=", "agenttest summary")
-        terminalreporter.write_line(f"Agent tests: {passed} passed, {failed} failed")
+    """Add an agenttest line to pytest's summary when agent tests ran."""
+    if not _outcomes:
+        return
+    terminalreporter.write_sep("=", "agenttest summary")
+    terminalreporter.write_line(
+        f"Agent tests: {_outcomes['passed']} passed, {_outcomes['failed']} failed, "
+        f"{_outcomes['skipped']} skipped"
+    )

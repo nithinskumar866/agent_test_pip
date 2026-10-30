@@ -12,6 +12,7 @@ from typing import Any, Final
 from pydantic import BaseModel, Field, PrivateAttr
 
 from agenttest.config import AgentTestConfigError, AgentTestError, AgentTestJudgeError, _load_config
+from agenttest.core.trace import Trace
 
 __all__ = ["AgentResult", "DEFAULT_JUDGE_MODEL", "_judge_llm", "_clear_judge_cache"]
 
@@ -171,7 +172,12 @@ def _clear_judge_cache() -> None:
 
 
 class AgentResult(BaseModel):
-    """The outcome of one agent run, with assertions attached."""
+    """The outcome of one agent run, with assertions attached.
+
+    Built by the engine via :meth:`from_trace`; the summary fields
+    (``steps_taken``, ``tools_called``, ``tokens_used``,
+    ``gracefully_degraded``) are derived from ``trace``.
+    """
 
     success: bool
     output: str
@@ -182,8 +188,54 @@ class AgentResult(BaseModel):
     gracefully_degraded: bool
     raw_trace: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
+    traceback: str | None = None
+    trace: Trace = Field(default_factory=Trace)
+    #: The agent's untouched return value (not serialised).
+    raw_output: Any = Field(default=None, exclude=True, repr=False)
 
     _hallucination_cache: float | None = PrivateAttr(default=None)
+    _exception: BaseException | None = PrivateAttr(default=None)
+
+    @classmethod
+    def from_trace(
+        cls,
+        trace: Trace,
+        *,
+        output: str,
+        latency_ms: float,
+        raw_output: Any = None,
+        exception: BaseException | None = None,
+        traceback: str | None = None,
+    ) -> AgentResult:
+        """Summarise a finished run.
+
+        ``gracefully_degraded`` means at least one tool failed during the run,
+        yet the agent still completed without raising and produced output.
+        """
+        success = exception is None
+        result = cls(
+            success=success,
+            output=output,
+            steps_taken=len(trace.steps),
+            tools_called=trace.tools_called,
+            tokens_used=trace.tokens_used,
+            latency_ms=latency_ms,
+            gracefully_degraded=success and bool(output.strip()) and bool(trace.failed_tool_calls),
+            raw_trace=trace.model_dump(),
+            error=f"{type(exception).__name__}: {exception}" if exception is not None else None,
+            traceback=traceback,
+            trace=trace,
+            raw_output=raw_output,
+        )
+        result._exception = exception
+        return result
+
+    def raise_for_error(self) -> None:
+        """Re-raise the exception that ended the run, if there was one."""
+        if self._exception is not None:
+            raise self._exception
+        if self.error is not None:
+            raise AgentTestError(self.error)
 
     def contains_fact(self, claim: str) -> bool:
         """Check whether the output asserts a factual claim using an LLM judge."""

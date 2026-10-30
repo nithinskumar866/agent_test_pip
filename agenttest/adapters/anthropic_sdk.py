@@ -1,96 +1,84 @@
-"""Anthropic SDK adapter — production trace capture for raw Anthropic SDK tool loops.
+"""Anthropic SDK adapter — traces hand-written tool loops on the raw SDK.
+
+During a run, ``anthropic.resources.messages.Messages.create`` (and its async
+twin) are patched so every Messages API call is recorded as an ``llm`` step
+with its token usage and the tools the model requested. The patch is removed
+when the run ends. Tools the loop executes are traced with
+:func:`agenttest.tool`.
 """
 
 from __future__ import annotations
 
 import functools
-from typing import Any
+import time
+from contextlib import ExitStack, contextmanager
+from typing import Any, ClassVar, Iterator
+from unittest import mock
 
-from agenttest.adapters.base import BaseAdapter
-from agenttest.core.result import AgentResult
+from agenttest.adapters.base import BaseAdapter, text_of
+from agenttest.core.trace import record_step
 
 __all__ = ["AnthropicAdapter"]
 
 
+def _record_message(request: dict[str, Any], response: Any, duration_ms: float) -> None:
+    usage = getattr(response, "usage", None)
+    blocks = getattr(response, "content", None) or []
+    record_step(
+        "llm",
+        "messages.create",
+        input=request.get("messages"),
+        output=" ".join(getattr(b, "text", "") for b in blocks if getattr(b, "type", None) == "text"),
+        model=getattr(response, "model", None) or request.get("model"),
+        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+        tool_requests=[getattr(b, "name", "unknown") for b in blocks if getattr(b, "type", None) == "tool_use"],
+        duration_ms=duration_ms,
+        metadata={"stop_reason": getattr(response, "stop_reason", None)},
+    )
+
+
+def _traced_sync(original: Any) -> Any:
+    @functools.wraps(original)
+    def create(self: Any, *args: Any, **kwargs: Any) -> Any:
+        start = time.perf_counter()
+        response = original(self, *args, **kwargs)
+        _record_message(kwargs, response, (time.perf_counter() - start) * 1000)
+        return response
+
+    return create
+
+
+def _traced_async(original: Any) -> Any:
+    @functools.wraps(original)
+    async def create(self: Any, *args: Any, **kwargs: Any) -> Any:
+        start = time.perf_counter()
+        response = await original(self, *args, **kwargs)
+        _record_message(kwargs, response, (time.perf_counter() - start) * 1000)
+        return response
+
+    return create
+
+
 class AnthropicAdapter(BaseAdapter):
-    """Adapter for raw Anthropic SDK tool loops."""
+    """Adapter for agents built directly on the Anthropic SDK."""
 
-    def __init__(self) -> None:
-        self._trace: list[dict[str, Any]] = []
+    name: ClassVar[str] = "anthropic"
 
-    def wrap(self, agent_fn: Any) -> Any:
-        import functools
+    @contextmanager
+    def instrument(self) -> Iterator[None]:
+        try:
+            from anthropic.resources.messages import AsyncMessages, Messages
+        except ImportError:
+            yield
+            return
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(Messages, "create", _traced_sync(Messages.create)))
+            stack.enter_context(mock.patch.object(AsyncMessages, "create", _traced_async(AsyncMessages.create)))
+            yield
 
-        @functools.wraps(agent_fn)
-        def patched(*args: Any, **kwargs: Any):
-            try:
-                import anthropic
-
-                original_create = anthropic.Anthropic.messages.create
-
-                def traced_create(self_client: Any, **kw: Any):
-                    response = original_create(self_client, **kw)
-                    usage = getattr(response, "usage", None)
-                    step = {
-                        "model": kw.get("model", "unknown"),
-                        "input_tokens": getattr(usage, "input_tokens", 0) if usage else 0,
-                        "output_tokens": getattr(usage, "output_tokens", 0) if usage else 0,
-                        "tool_calls": [
-                            getattr(b, "name", "unknown") for b in response.content
-                            if getattr(b, "type", None) == "tool_use"
-                        ],
-                        "output": " ".join(
-                            getattr(b, "text", "") for b in response.content
-                            if hasattr(b, "text")
-                        ),
-                    }
-                    self._trace.append(step)
-                    return response
-
-                import unittest.mock as mock
-
-                with mock.patch.object(
-                    anthropic.Anthropic.messages.__class__,
-                    "create",
-                    traced_create,
-                ):
-                    return agent_fn(*args, **kwargs)
-            except (ImportError, AttributeError):
-                res = agent_fn(*args, **kwargs)
-                out_text = getattr(res, "content", str(res))
-                if isinstance(out_text, list):
-                    out_text = " ".join(getattr(b, "text", str(b)) for b in out_text if hasattr(b, "text"))
-                self._trace.append({
-                    "model": "unknown",
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "tool_calls": [],
-                    "output": str(out_text),
-                })
-                return res
-
-        return patched
-
-    def capture_trace(self) -> dict[str, Any]:
-        return {"steps": self._trace}
-
-    def build_result(self, trace: dict[str, Any], latency_ms: float) -> AgentResult:
-        steps = trace.get("steps", [])
-        tools_called: list[str] = []
-        total_tokens = 0
-        for step in steps:
-            tools_called.extend(step.get("tool_calls", []))
-            total_tokens += (
-                step.get("input_tokens", 0) + step.get("output_tokens", 0)
-            )
-        final_output = steps[-1]["output"] if steps else ""
-        return AgentResult(
-            success=True,
-            output=final_output,
-            steps_taken=len(steps),
-            tools_called=tools_called,
-            tokens_used=total_tokens,
-            latency_ms=latency_ms,
-            gracefully_degraded=False,
-            raw_trace=trace,
-        )
+    def extract_output(self, raw: Any) -> str:
+        blocks = getattr(raw, "content", None)
+        if isinstance(blocks, list):
+            return " ".join(getattr(b, "text", "") for b in blocks if getattr(b, "type", None) == "text")
+        return text_of(raw)

@@ -1,112 +1,94 @@
-"""LangGraph adapter — captures traces by wrapping graph node execution.
+"""LangGraph adapter — traces a compiled graph by streaming its node updates.
 
-Intercepts LangGraph execution to record node inputs/outputs, tools invoked,
-and builds an AgentResult.
+Rather than replacing nodes on the user's graph (which breaks compiled
+``PregelNode`` objects and leaks across runs), the adapter runs the graph with
+``stream(stream_mode="updates")``: each yielded update is one node execution.
+Tool executions are read from the ``ToolMessage`` objects that tool nodes add
+to the state.
 """
 
 from __future__ import annotations
 
-import functools
 import time
-from typing import Any, Callable
+from typing import Any, ClassVar
 
-from agenttest.adapters.base import BaseAdapter
-from agenttest.core.result import AgentResult
-from agenttest.mocks._registry import MOCK_REGISTRY
+from agenttest.adapters.base import BaseAdapter, call_agent
+from agenttest.core.trace import record_step
 
 __all__ = ["LangGraphAdapter"]
 
 
+def _messages_in(update: Any) -> list[Any]:
+    if isinstance(update, dict):
+        messages = update.get("messages")
+        if isinstance(messages, list):
+            return messages
+        if messages is not None:
+            return [messages]
+    return []
+
+
+def _usage_of(message: Any) -> tuple[int, int]:
+    usage = getattr(message, "usage_metadata", None) or {}
+    return int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0)
+
+
 class LangGraphAdapter(BaseAdapter):
-    """Adapter for LangGraph pipelines."""
+    """Adapter for compiled LangGraph graphs."""
 
-    def __init__(self) -> None:
-        self._trace: list[dict[str, Any]] = []
+    name: ClassVar[str] = "langgraph"
 
-    def wrap(self, graph: Any) -> Any:
-        """Wrap a LangGraph object (or runnable graph) to capture node traces."""
-        if not hasattr(graph, "invoke"):
-            # Plain callable wrapper fallback
-            return graph
+    @classmethod
+    def can_handle(cls, agent: Any) -> bool:
+        return type(agent).__module__.startswith("langgraph") and hasattr(agent, "stream")
 
-        original_invoke = graph.invoke
+    def invoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
+        if not hasattr(agent, "stream"):
+            return call_agent(agent, *args, **kwargs)
 
-        @functools.wraps(original_invoke)
-        def patched_invoke(state: Any, config: Any = None) -> Any:
-            self._trace.clear()
-            if hasattr(graph, "nodes") and isinstance(graph.nodes, dict):
-                for node_name, node_runnable in graph.nodes.items():
-                    original_runnable = node_runnable
+        state: dict[str, Any] = {}
+        last = time.perf_counter()
+        for chunk in agent.stream(*args, stream_mode="updates", **kwargs):
+            now = time.perf_counter()
+            if not isinstance(chunk, dict):
+                continue
+            for node, update in chunk.items():
+                self._record_node(node, update, (now - last) * 1000)
+                if isinstance(update, dict):
+                    state.update(update)
+            last = now
+        return state
 
-                    def make_traced(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-                        def traced_fn(s: Any, c: Any = None) -> Any:
-                            # Check mock registry for tool mocks
-                            if name in MOCK_REGISTRY:
-                                mock_info = MOCK_REGISTRY[name]
-                                if mock_info.get("type") == "failure":
-                                    raise RuntimeError(mock_info.get("error", f"Tool '{name}' failed"))
-                                elif mock_info.get("type") == "response":
-                                    res = mock_info.get("data", {})
-                                    self._trace.append({"node": name, "input": dict(s) if hasattr(s, "keys") else str(s), "output": res})
-                                    return res
-                                elif mock_info.get("type") == "latency":
-                                    time.sleep(mock_info.get("delay", 0))
+    def _record_node(self, node: str, update: Any, duration_ms: float) -> None:
+        messages = _messages_in(update)
+        input_tokens = output_tokens = 0
+        requested: list[str] = []
+        for message in messages:
+            i, o = _usage_of(message)
+            input_tokens += i
+            output_tokens += o
+            for call in getattr(message, "tool_calls", None) or []:
+                tool_name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
+                if tool_name:
+                    requested.append(tool_name)
 
-                            result = fn(s, c) if c is not None else fn(s)
-                            self._trace.append({
-                                "node": name,
-                                "input": dict(s) if hasattr(s, "keys") else str(s),
-                                "output": dict(result) if hasattr(result, "keys") else str(result),
-                            })
-                            return result
-
-                        return traced_fn
-
-                    graph.nodes[node_name] = make_traced(node_name, original_runnable)
-
-            return original_invoke(state, config) if config is not None else original_invoke(state)
-
-        graph.invoke = patched_invoke
-        return graph
-
-    def capture_trace(self) -> dict[str, Any]:
-        return {"steps": list(self._trace)}
-
-    def build_result(self, trace: dict[str, Any], latency_ms: float) -> AgentResult:
-        steps = trace.get("steps", [])
-        tools_called: list[str] = []
-        final_output = ""
-
-        for step in steps:
-            output = step.get("output", {})
-            if isinstance(output, dict) and "tool_calls" in output:
-                for t in output["tool_calls"]:
-                    if isinstance(t, dict) and "name" in t:
-                        tools_called.append(t["name"])
-                    elif isinstance(t, str):
-                        tools_called.append(t)
-
-        if steps:
-            last_output = steps[-1].get("output", {})
-            if isinstance(last_output, dict):
-                if "messages" in last_output and last_output["messages"]:
-                    last_msg = last_output["messages"][-1]
-                    final_output = getattr(last_msg, "content", str(last_msg))
-                elif "output" in last_output:
-                    final_output = str(last_output["output"])
-                else:
-                    final_output = str(last_output)
-            else:
-                final_output = str(last_output)
-
-        return AgentResult(
-            success=True,
-            output=final_output,
-            steps_taken=len(steps),
-            tools_called=tools_called,
-            tokens_used=0,
-            latency_ms=latency_ms,
-            gracefully_degraded=False,
-            raw_trace=trace,
-            error=None,
+        record_step(
+            "node",
+            node,
+            output=update,
+            duration_ms=duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            tool_requests=requested,
         )
+        for message in messages:
+            if getattr(message, "type", None) == "tool":
+                failed = getattr(message, "status", None) == "error"
+                content = getattr(message, "content", None)
+                record_step(
+                    "tool",
+                    getattr(message, "name", None) or "unknown",
+                    output=None if failed else content,
+                    error=str(content) if failed else None,
+                    metadata={"tool_call_id": getattr(message, "tool_call_id", None), "node": node},
+                )

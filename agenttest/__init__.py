@@ -20,8 +20,17 @@ from agenttest.assertions.structural import (
     assert_tool_was_not_called,
     assert_word_count_between,
 )
+from agenttest.adapters.base import BaseAdapter
+from agenttest.config import (
+    AgentTestConfigError,
+    AgentTestError,
+    AgentTestJudgeError,
+    AgentTestTimeoutError,
+)
 from agenttest.core.decorator import agent_test
 from agenttest.core.result import AgentResult
+from agenttest.core.runner import arun, run
+from agenttest.core.trace import Step, Trace, current_trace, tool
 from agenttest.mocks.tool_failure import (
     mock_tool_failure,
     mock_tool_latency,
@@ -30,8 +39,19 @@ from agenttest.mocks.tool_failure import (
 
 __version__ = "0.1.0"
 __all__ = [
+    "run",
+    "arun",
     "agent_test",
+    "tool",
     "AgentResult",
+    "Trace",
+    "Step",
+    "current_trace",
+    "BaseAdapter",
+    "AgentTestError",
+    "AgentTestConfigError",
+    "AgentTestJudgeError",
+    "AgentTestTimeoutError",
     "mock_tool_failure",
     "mock_tool_response",
     "mock_tool_latency",
