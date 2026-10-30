@@ -30,6 +30,7 @@ from agenttest.adapters import BaseAdapter, resolve_adapter
 from agenttest.config import AgentTestError, AgentTestTimeoutError, load_config
 from agenttest.core.result import AgentResult
 from agenttest.core.trace import Trace, tracing
+from agenttest.reporting import record_result
 
 __all__ = ["run", "arun", "run_agent_test", "RunSettings", "current_settings", "settings_scope"]
 
@@ -75,7 +76,13 @@ def _prepare(agent: Any, adapter: BaseAdapter | str | None, timeout: float | Non
     return resolve_adapter(agent, adapter, config.framework), timeout
 
 
-def _finish(
+def _finish(*args: Any, **kwargs: Any) -> AgentResult:
+    result = _build_result(*args, **kwargs)
+    record_result(result)
+    return result
+
+
+def _build_result(
     adapter: BaseAdapter,
     trace: Trace,
     start: float,
@@ -94,7 +101,7 @@ def _finish(
     try:
         output = adapter.extract_output(raw)
     except Exception as extract_exc:
-        return _finish(adapter, trace, start, exc=extract_exc)
+        return _build_result(adapter, trace, start, exc=extract_exc)
     return AgentResult.from_trace(trace, output=output, latency_ms=latency_ms, raw_output=raw)
 
 

@@ -11,15 +11,19 @@ import click
 from rich.console import Console
 from rich.panel import Panel
 
+from agenttest import __version__
+from agenttest.cli._console import make_safe, symbols
+
 console = Console()
 
 __all__ = ["main", "init", "_detect_framework", "_detect_judge_provider"]
 
 
 @click.group()
+@click.version_option(version=__version__, message="agenttest %(version)s")
 def main() -> None:
-    """agenttest CLI tools."""
-    pass
+    """agenttest - behavioural testing for AI agents."""
+    make_safe()
 
 
 @main.command()
@@ -33,15 +37,22 @@ def main() -> None:
     default=None,
     help="Judge provider: anthropic/openai/gemini/ollama/none",
 )
-def init(framework: str | None, judge: str | None) -> None:
+@click.option("--force", is_flag=True, help="Overwrite an existing agenttest.config.json.")
+@click.option("--example", is_flag=True, help="Also write tests/test_agent_example.py, a runnable starting point.")
+def init(framework: str | None, judge: str | None, force: bool, example: bool) -> None:
     """Initialize agenttest in the current project."""
     console.print(
         Panel(
-            "[bold cyan]agenttest[/bold cyan] — AI agent testing framework",
-            subtitle="v0.1.0 initialization",
+            f"[bold cyan]agenttest[/bold cyan] {symbols()['dash']} AI agent testing framework",
+            subtitle=f"v{__version__} initialization",
             border_style="cyan",
         )
     )
+
+    config_path = Path.cwd() / "agenttest.config.json"
+    if config_path.exists() and not force:
+        console.print("[yellow]agenttest.config.json already exists.[/yellow] Use --force to overwrite it.")
+        raise SystemExit(1)
 
     # Framework detection
     detected_framework = framework or _detect_framework()
@@ -74,19 +85,22 @@ def init(framework: str | None, judge: str | None) -> None:
         "max_retries": 0,
     }
 
-    config_path = Path.cwd() / "agenttest.config.json"
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    example_path = _write_example() if example else None
 
     # Rich output table
     from rich.table import Table
 
+    tick = symbols()["ok"]
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column(style="green")
     table.add_column(style="bold white")
-    table.add_row("✓ Framework detected", detected_framework)
-    table.add_row("✓ Judge provider", detected_judge)
-    table.add_row("✓ Judge model", judge_model)
-    table.add_row("✓ Config written", "agenttest.config.json")
+    table.add_row(f"{tick} Framework detected", detected_framework)
+    table.add_row(f"{tick} Judge provider", detected_judge)
+    table.add_row(f"{tick} Judge model", judge_model)
+    table.add_row(f"{tick} Config written", "agenttest.config.json")
+    if example_path is not None:
+        table.add_row(f"{tick} Example test", str(example_path))
     console.print(table)
 
     # Show next steps based on judge provider
@@ -115,9 +129,66 @@ def init(framework: str | None, judge: str | None) -> None:
         console.print("  3. Write tests using [bold]@agent_test[/bold]")
         console.print("  4. Run [bold cyan]pytest[/bold cyan]")
     else:
-        console.print("  Judge disabled — use structural assertions only")
+        console.print("  Judge disabled - use structural assertions only")
         console.print("  Write tests using [bold]@agent_test[/bold]")
         console.print("  Run [bold cyan]pytest[/bold cyan]")
+
+
+_EXAMPLE = '''"""A starting point for agent tests (written by `agenttest init --example`).
+
+Runs without any API key: the agent is plain Python, and the one judge-backed
+check uses a scripted judge. Replace `answer_question` with your own agent.
+"""
+
+import agenttest
+from agenttest import agent_test, assert_tool_was_called, mock_tool_failure
+
+
+@agenttest.tool
+def search(query: str) -> str:
+    return "Paris is the capital of France."
+
+
+def answer_question(question: str) -> str:
+    try:
+        return f"According to my search: {search(question)}"
+    except Exception:
+        return "Search is unavailable right now, so I cannot answer reliably."
+
+
+@agent_test
+def test_agent_uses_search():
+    result = agenttest.run(answer_question, "What is the capital of France?")
+    assert result.success, result.error
+    assert_tool_was_called(result, "search")
+
+
+@agent_test
+def test_agent_degrades_gracefully_when_search_fails():
+    with mock_tool_failure("search", "503 Service Unavailable"):
+        result = agenttest.run(answer_question, "What is the capital of France?")
+    assert result.gracefully_degraded
+
+
+@agent_test
+def test_answer_is_grounded_in_the_search_result():
+    result = agenttest.run(answer_question, "What is the capital of France?")
+    scripted = ('{"claims": [{"claim": "Paris is the capital of France", "status": "supported", '
+                '"evidence": [{"passage": 1, "quote": "Paris is the capital of France"}]}]}')
+    # Remove use_judge to check with your configured judge model instead.
+    with agenttest.use_judge(lambda prompt, system: scripted):
+        agenttest.assert_grounded(result)  # context defaults to the run's tool outputs
+'''
+
+
+def _write_example() -> Path | None:
+    path = Path.cwd() / "tests" / "test_agent_example.py"
+    if path.exists():
+        console.print(f"[yellow]{path} already exists; not overwritten.[/yellow]")
+        return None
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(_EXAMPLE, encoding="utf-8")
+    return path.relative_to(Path.cwd())
 
 
 def _detect_framework() -> str:
@@ -182,6 +253,16 @@ def _detect_judge_provider() -> str:
 
     return "none"
 
+
+def _register() -> None:
+    from agenttest.cli.doctor import doctor
+    from agenttest.cli.report import report
+
+    main.add_command(doctor)
+    main.add_command(report)
+
+
+_register()
 
 if __name__ == "__main__":
     main()
