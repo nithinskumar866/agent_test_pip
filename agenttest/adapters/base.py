@@ -2,7 +2,8 @@
 
 An adapter knows three things about one kind of agent:
 
-* how to **call** it (:meth:`BaseAdapter.invoke`),
+* how to **call** it (:meth:`BaseAdapter.invoke`, and natively from async
+  code with :meth:`BaseAdapter.ainvoke`),
 * how to **observe** it — hooks installed for exactly one run by
   :meth:`BaseAdapter.instrument` and removed afterwards, recording steps into
   the active :class:`~agenttest.core.trace.Trace`,
@@ -17,6 +18,9 @@ Also hosts ``GenericAdapter``, used for plain Python callables.
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import inspect
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Iterator
 
@@ -38,6 +42,13 @@ def entry_point(agent: Any) -> Any:
         f"Don't know how to run {type(agent).__name__!r}: expected a callable "
         "or an object with a run()/invoke() method."
     )
+
+
+def _is_coroutine_entry(agent: Any) -> bool:
+    try:
+        return inspect.iscoroutinefunction(entry_point(agent))
+    except TypeError:
+        return False
 
 
 def call_agent(agent: Any, *args: Any, **kwargs: Any) -> Any:
@@ -84,6 +95,22 @@ class BaseAdapter:
     def invoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
         """Run the agent and return its raw result (may be awaitable)."""
         return call_agent(agent, *args, **kwargs)
+
+    async def ainvoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
+        """Run the agent from async code and return its raw result.
+
+        The default runs a plain ``async def`` agent on the event loop and
+        anything else in a worker thread (with this context, so it records into
+        the same trace). Adapters whose framework has a native async API
+        override this to use it.
+        """
+        if type(self).invoke is BaseAdapter.invoke and _is_coroutine_entry(agent):
+            return await call_agent(agent, *args, **kwargs)
+        context = contextvars.copy_context()
+        raw = await asyncio.to_thread(context.run, self.invoke, agent, *args, **kwargs)
+        if inspect.isawaitable(raw):
+            raw = await raw
+        return raw
 
     def extract_output(self, raw: Any) -> str:
         """Turn the agent's raw result into its final text output."""

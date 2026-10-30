@@ -5,12 +5,17 @@ adapter does that, then reads the run result: ``new_items`` gives tool calls
 and their outputs, ``raw_responses`` gives one ``llm`` step per model response
 with its token usage.
 
+``arun`` uses the native ``Runner.run``.
+
 Tool mocks: for the duration of the run, each function tool reachable from
-the agent (its tools, and the tools of agents it can hand off to) has its
-``on_invoke_tool`` wrapped. A mocked failure goes through the tool's own
+the agent has its ``on_invoke_tool`` wrapped — the agent's own tools, those
+of agents it hands off to (directly or through ``handoff()``), and those of
+agents exposed with ``Agent.as_tool()``. Tools resolved only at run time
+(MCP servers) are not reachable and cannot be mocked. A mocked failure goes through the tool's own
 failure policy (default error message, custom ``failure_error_function``, or
 re-raise) — so the agent sees what it would see for a real tool error — and
-is recorded on the matching tool step.
+is recorded on the matching tool step; a mocked failure with no matching step
+(a crashed run, or a tool of a nested ``as_tool`` agent) gets a step of its own.
 
 Any other agent (a function wrapping the SDK, for example) is called as-is.
 """
@@ -35,7 +40,7 @@ def _item_type(item: Any) -> str | None:
     return getattr(item, "type", None)
 
 
-def _record_run(result: Any, failures: dict[str, list[str]]) -> None:
+def _record_run(result: Any, failures: dict[str, list[tuple[str, str]]]) -> None:
     for response in getattr(result, "raw_responses", None) or []:
         usage = getattr(response, "usage", None)
         record_step(
@@ -47,6 +52,25 @@ def _record_run(result: Any, failures: dict[str, list[str]]) -> None:
         )
 
     pending: dict[str, Any] = {}
+    try:
+        _record_items(result, failures, pending)
+    finally:
+        _record_leftover_failures(failures)
+
+
+def _record_leftover_failures(failures: dict[str, list[tuple[str, str]]]) -> None:
+    for key, queue in failures.items():
+        for name, error in queue:
+            record_step(
+                "tool",
+                name,
+                error=error,
+                metadata={"call_id": None if key.startswith("name:") else key, "mocked": "failure", "unreported": True},
+            )
+    failures.clear()
+
+
+def _record_items(result: Any, failures: dict[str, list[tuple[str, str]]], pending: dict[str, Any]) -> None:
     for item in getattr(result, "new_items", None) or []:
         raw = getattr(item, "raw_item", None)
         if _item_type(item) == "tool_call_item":
@@ -69,30 +93,37 @@ def _record_run(result: Any, failures: dict[str, list[str]]) -> None:
                 step.output = getattr(item, "output", None)
 
 
-def _take_failure(failures: dict[str, list[str]], call_id: str | None, name: str) -> str | None:
+def _take_failure(failures: dict[str, list[tuple[str, str]]], call_id: str | None, name: str) -> str | None:
     """Pop the mocked failure for this call: by call id, else first by tool name."""
     if call_id and call_id in failures:
-        return failures.pop(call_id)[0]
+        return failures.pop(call_id)[0][1]
     queue = failures.get(f"name:{name}")
-    return queue.pop(0) if queue else None
+    return queue.pop(0)[1] if queue else None
+
+
+def _handoff_target(handoff: Any) -> Any:
+    if hasattr(handoff, "tools"):  # an Agent listed directly
+        return handoff
+    ref = getattr(handoff, "_agent_ref", None)  # a Handoff built by handoff()
+    return ref() if callable(ref) else None
 
 
 def _reachable_agents(agent: Any) -> list[Any]:
+    """The agent, agents it can hand off to, and agents wrapped by its tools."""
     seen: dict[int, Any] = {}
     stack = [agent]
     while stack:
         current = stack.pop()
-        if id(current) in seen:
+        if current is None or id(current) in seen:
             continue
         seen[id(current)] = current
-        for handoff in getattr(current, "handoffs", None) or []:
-            if hasattr(handoff, "tools"):  # an Agent, not a Handoff object
-                stack.append(handoff)
+        stack.extend(_handoff_target(h) for h in getattr(current, "handoffs", None) or [])
+        stack.extend(getattr(t, "_agent_instance", None) for t in getattr(current, "tools", None) or [])
     return list(seen.values())
 
 
 @contextmanager
-def _mock_function_tools(agent: Any, failures: dict[str, list[str]]) -> Iterator[None]:
+def _mock_function_tools(agent: Any, failures: dict[str, list[tuple[str, str]]]) -> Iterator[None]:
     saved: list[tuple[Any, Any]] = []
     for owner in _reachable_agents(agent):
         for tool in getattr(owner, "tools", None) or []:
@@ -128,7 +159,7 @@ async def _handle_mocked_failure(tool: Any, ctx: Any, exc: Exception) -> Any:
     return result
 
 
-def _wrap_invoke(tool: Any, original: Any, failures: dict[str, list[str]]) -> Any:
+def _wrap_invoke(tool: Any, original: Any, failures: dict[str, list[tuple[str, str]]]) -> Any:
     name = tool.name
 
     @functools.wraps(original)
@@ -140,7 +171,7 @@ def _wrap_invoke(tool: Any, original: Any, failures: dict[str, list[str]]) -> An
             if handle is None or handle.type != "failure":
                 raise  # a real tool error: the SDK handles it as it normally would
             call_id = getattr(ctx, "tool_call_id", None)
-            failures.setdefault(call_id if call_id else f"name:{name}", []).append(f"{type(exc).__name__}: {exc}")
+            failures.setdefault(call_id if call_id else f"name:{name}", []).append((name, f"{type(exc).__name__}: {exc}"))
             return await _handle_mocked_failure(tool, ctx, exc)
 
     on_invoke_tool._agenttest_mock_wrapper = True  # type: ignore[attr-defined]
@@ -161,14 +192,40 @@ class OpenAIAdapter(BaseAdapter):
         if not self.can_handle(agent):
             return call_agent(agent, *args, **kwargs)
 
-        # The engine never calls invoke() on a running event loop (arun uses a
-        # worker thread), so run_sync is always safe here.
+        # The engine never calls invoke() on a running event loop (arun uses
+        # ainvoke), so run_sync is always safe here.
         from agents import Runner
 
-        failures: dict[str, list[str]] = {}
-        with _mock_function_tools(agent, failures):
-            result = Runner.run_sync(agent, *args, **kwargs)
-        _record_run(result, failures)
+        failures: dict[str, list[tuple[str, str]]] = {}
+        result: Any = None
+        try:
+            with _mock_function_tools(agent, failures):
+                result = Runner.run_sync(agent, *args, **kwargs)
+        except Exception as exc:
+            # SDK exceptions carry what ran before the failure.
+            result = getattr(exc, "run_data", None)
+            raise
+        finally:
+            _record_run(result, failures)
+        return result
+
+    async def ainvoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
+        if not self.can_handle(agent):
+            return await super().ainvoke(agent, *args, **kwargs)
+
+        from agents import Runner
+
+        failures: dict[str, list[tuple[str, str]]] = {}
+        result: Any = None
+        try:
+            with _mock_function_tools(agent, failures):
+                result = await Runner.run(agent, *args, **kwargs)
+        except Exception as exc:
+            # SDK exceptions carry what ran before the failure.
+            result = getattr(exc, "run_data", None)
+            raise
+        finally:
+            _record_run(result, failures)
         return result
 
     def extract_output(self, raw: Any) -> str:

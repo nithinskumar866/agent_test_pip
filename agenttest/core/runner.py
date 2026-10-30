@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from agenttest.adapters import BaseAdapter, resolve_adapter
-from agenttest.adapters.base import entry_point
 from agenttest.config import AgentTestError, AgentTestTimeoutError, load_config
 from agenttest.core.result import AgentResult
 from agenttest.core.trace import Trace, tracing
@@ -186,7 +185,10 @@ async def arun(
 ) -> AgentResult:
     """Async twin of :func:`run`, for async tests and async agents.
 
-    A synchronous agent is run in a worker thread so it does not block the loop.
+    Framework agents run through their native async API where they have one
+    (``astream``, ``Runner.run``, ``kickoff_async``); a synchronous agent is
+    run in a worker thread so it does not block the loop. On timeout a native
+    async run is cancelled; a thread cannot be, and finishes in the background.
     """
     chosen, timeout = _prepare(agent, adapter, timeout)
     with tracing() as trace:
@@ -194,14 +196,7 @@ async def arun(
 
         async def call() -> Any:
             with chosen.instrument():
-                if _is_async_entry(chosen, agent):
-                    raw = chosen.invoke(agent, *args, **kwargs)
-                else:
-                    context = contextvars.copy_context()
-                    raw = await asyncio.to_thread(context.run, chosen.invoke, agent, *args, **kwargs)
-                if inspect.isawaitable(raw):
-                    raw = await raw
-                return raw
+                return await chosen.ainvoke(agent, *args, **kwargs)
 
         try:
             raw = await asyncio.wait_for(call(), timeout=timeout)
@@ -210,20 +205,6 @@ async def arun(
         except Exception as exc:
             return _finish(chosen, trace, start, exc=exc)
         return _finish(chosen, trace, start, raw)
-
-
-def _is_async_entry(adapter: BaseAdapter, agent: Any) -> bool:
-    """Whether invoking the agent returns an awaitable, so it is safe on the event loop.
-
-    Only plain agents whose entry point is ``async def`` qualify; framework
-    adapters drive their agents synchronously, so those go to a worker thread.
-    """
-    if type(adapter).invoke is not BaseAdapter.invoke:
-        return False
-    try:
-        return inspect.iscoroutinefunction(entry_point(agent))
-    except TypeError:
-        return False
 
 
 #: Backwards-compatible name from v0.1.

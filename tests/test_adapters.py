@@ -280,3 +280,110 @@ def test_crewai_kickoff_and_task_outputs():
     assert [s.name for s in result.trace.steps] == ["Researcher", "Writer"]
     assert result.tokens_used == 140
     assert result.steps_taken == 2
+
+
+# --- async paths and reachability ---------------------------------------------
+
+class FakeAsyncGraph(FakeCompiledGraph):
+    def stream(self, *args, **kwargs):
+        raise AssertionError("arun must use astream")
+
+    async def astream(self, *args, **kwargs):
+        for chunk in self._updates:
+            yield chunk
+
+
+FakeAsyncGraph.__module__ = "langgraph.graph.state"
+
+
+def test_langgraph_arun_uses_astream():
+    import asyncio
+
+    from agenttest import arun
+
+    graph = FakeAsyncGraph([{"agent": {"messages": [ai("async hi")]}}])
+    result = asyncio.run(arun(graph, {"messages": []}))
+    assert result.success, result.traceback
+    assert result.output == "async hi"
+
+
+def test_base_adapter_ainvoke_runs_async_callables_on_the_loop():
+    import asyncio
+    import threading
+
+    seen = []
+
+    async def agent():
+        seen.append(threading.current_thread().name)
+        return "ok"
+
+    assert asyncio.run(GenericAdapter().ainvoke(agent)) == "ok"
+    assert seen == [threading.main_thread().name]
+
+
+def test_base_adapter_ainvoke_runs_sync_callables_in_a_thread():
+    import asyncio
+    import threading
+
+    def agent():
+        return threading.current_thread().name
+
+    assert asyncio.run(GenericAdapter().ainvoke(agent)) != threading.main_thread().name
+
+
+def test_crewai_ainvoke_prefers_native_akickoff():
+    import asyncio
+
+    calls = []
+
+    class Crew:
+        def kickoff(self, **kwargs):
+            raise AssertionError("must not run sync kickoff")
+
+        async def akickoff(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(raw="async crew", tasks_output=[], token_usage=None)
+
+    Crew.__module__ = "crewai.crew"
+    with tracing():
+        raw = asyncio.run(CrewAIAdapter().ainvoke(Crew(), {"topic": "ai"}))
+    assert raw.raw == "async crew"
+    assert calls == [{"inputs": {"topic": "ai"}}]
+
+
+def test_openai_reachable_agents_follow_handoff_objects_and_agent_tools():
+    import weakref
+
+    from agenttest.adapters.openai_sdk import _reachable_agents
+
+    class Agent(SimpleNamespace):  # SimpleNamespace itself is not weak-referenceable
+        pass
+
+    nested = Agent(name="nested", tools=[], handoffs=[])
+    behind_handoff = Agent(name="behind", tools=[], handoffs=[])
+    direct = Agent(name="direct", tools=[], handoffs=[])
+    handoff_obj = SimpleNamespace(tool_name="transfer", _agent_ref=weakref.ref(behind_handoff))
+    agent_tool = SimpleNamespace(name="ask_nested", _agent_instance=nested)
+    root = Agent(name="root", tools=[agent_tool], handoffs=[direct, handoff_obj])
+    root.handoffs.append(root)  # cycles are fine
+
+    assert sorted(a.name for a in _reachable_agents(root)) == ["behind", "direct", "nested", "root"]
+
+
+def test_tool_run_log_take_is_selective_and_thread_safe():
+    import threading
+
+    from agenttest.adapters._langchain_tools import ToolRun, ToolRunLog
+
+    log = ToolRunLog()
+    threads = [threading.Thread(target=log.add, args=(ToolRun(name=f"t{i}", input=None, tool_call_id=str(i % 2)),))
+               for i in range(50)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    odd = log.take(lambda r: r.tool_call_id == "1")
+    assert len(odd) == 25
+    assert len(log.take()) == 25
+    assert log.take() == []

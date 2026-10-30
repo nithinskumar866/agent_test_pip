@@ -10,23 +10,88 @@ applied around the concrete tool class's ``_run`` / ``_arun``:
 * every wrapper is removed when the run ends.
 
 Patching the class (not the instance) keeps concurrent calls of the same tool
-safe. Tool steps are not recorded here — the LangGraph adapter reads them from
-the resulting ``ToolMessage`` objects, which also covers tools agenttest
-cannot intercept.
+safe. Tool steps are not recorded here. Each ``BaseTool.run`` is logged as a
+:class:`ToolRun`; the LangGraph adapter records steps from the graph's
+``ToolMessage`` objects and uses the log for runs that produced none (a tool
+called directly inside a node, or a failure that crashed the graph).
 """
 
 from __future__ import annotations
 
+import contextvars
 import functools
 import threading
+import time
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-from agenttest.mocks._registry import apply_mock, apply_mock_async
+from agenttest.mocks._registry import active_mock, apply_mock, apply_mock_async
 
-__all__ = ["langchain_tool_mocks"]
+__all__ = ["ToolRun", "ToolRunLog", "langchain_tool_mocks", "current_tool_log"]
 
 _MISSING = object()
+
+
+@dataclass
+class ToolRun:
+    """One completed ``BaseTool.run`` / ``arun`` call."""
+
+    name: str
+    input: Any
+    output: Any = None
+    error: str | None = None
+    tool_call_id: str | None = None
+    duration_ms: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class ToolRunLog:
+    """Thread-safe log of the LangChain tool runs made during one agent run."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._runs: list[ToolRun] = []
+
+    def add(self, run: ToolRun) -> None:
+        with self._lock:
+            self._runs.append(run)
+
+    def take(self, predicate: Any = None) -> list[ToolRun]:
+        """Remove and return the runs matching ``predicate`` (all by default)."""
+        with self._lock:
+            taken = [r for r in self._runs if predicate is None or predicate(r)]
+            self._runs = [r for r in self._runs if r not in taken]
+        return taken
+
+
+_LOG: contextvars.ContextVar[ToolRunLog | None] = contextvars.ContextVar("agenttest_langchain_tool_log", default=None)
+
+
+def current_tool_log() -> ToolRunLog | None:
+    """The log of the enclosing :func:`langchain_tool_mocks` block, if any."""
+    return _LOG.get()
+
+
+def _begin(tool: Any, tool_input: Any, kwargs: dict[str, Any]) -> tuple[ToolRun, float]:
+    handle = active_mock(tool.name)
+    run = ToolRun(
+        name=tool.name,
+        input=tool_input,
+        tool_call_id=kwargs.get("tool_call_id"),
+        metadata={"mocked": handle.type} if handle is not None else {},
+    )
+    return run, time.perf_counter()
+
+
+def _end(log: ToolRunLog, run: ToolRun, start: float, output: Any = None, exc: BaseException | None = None) -> None:
+    run.duration_ms = (time.perf_counter() - start) * 1000
+    if exc is not None:
+        run.error = f"{type(exc).__name__}: {exc}"
+    else:
+        # With a tool_call_id, BaseTool.run returns a ToolMessage.
+        run.output = getattr(output, "content", output)
+    log.add(run)
 
 
 class _ClassPatcher:
@@ -81,33 +146,53 @@ def _wrap_arun(original: Any) -> Any:
 
 
 @contextmanager
-def langchain_tool_mocks() -> Iterator[None]:
-    """Make agenttest tool mocks apply to every LangChain tool run in the block."""
+def langchain_tool_mocks() -> Iterator[ToolRunLog | None]:
+    """Make agenttest tool mocks apply to every LangChain tool run in the block.
+
+    Yields the block's :class:`ToolRunLog` (``None`` without langchain-core).
+    """
     try:
         from langchain_core.tools import BaseTool
     except ImportError:
-        yield
+        yield None
         return
 
     patcher = _ClassPatcher()
+    log = ToolRunLog()
     original_run = BaseTool.run
     original_arun = BaseTool.arun
 
     @functools.wraps(original_run)
-    def run(self: Any, *args: Any, **kwargs: Any) -> Any:
+    def run(self: Any, tool_input: Any = None, *args: Any, **kwargs: Any) -> Any:
         patcher.ensure(type(self))
-        return original_run(self, *args, **kwargs)
+        record, start = _begin(self, tool_input, kwargs)
+        try:
+            output = original_run(self, tool_input, *args, **kwargs)
+        except Exception as exc:
+            _end(log, record, start, exc=exc)
+            raise
+        _end(log, record, start, output)
+        return output
 
     @functools.wraps(original_arun)
-    async def arun(self: Any, *args: Any, **kwargs: Any) -> Any:
+    async def arun(self: Any, tool_input: Any = None, *args: Any, **kwargs: Any) -> Any:
         patcher.ensure(type(self))
-        return await original_arun(self, *args, **kwargs)
+        record, start = _begin(self, tool_input, kwargs)
+        try:
+            output = await original_arun(self, tool_input, *args, **kwargs)
+        except Exception as exc:
+            _end(log, record, start, exc=exc)
+            raise
+        _end(log, record, start, output)
+        return output
 
     BaseTool.run = run  # type: ignore[method-assign]
     BaseTool.arun = arun  # type: ignore[method-assign]
+    token = _LOG.set(log)
     try:
-        yield
+        yield log
     finally:
+        _LOG.reset(token)
         BaseTool.run = original_run  # type: ignore[method-assign]
         BaseTool.arun = original_arun  # type: ignore[method-assign]
         patcher.restore()

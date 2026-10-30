@@ -9,6 +9,11 @@ to the state, and tool mocks are applied to LangChain tools during the run.
 Whether a mocked tool failure crashes the graph or becomes an error
 ``ToolMessage`` is decided by the graph itself (``ToolNode(handle_tool_errors=...)``),
 exactly as for a real failure.
+
+LangChain tool runs that produce no ``ToolMessage`` are recorded from the
+tool-run log instead: a tool called directly inside a node is recorded after
+that node's step, and a failure that crashed the graph is recorded before the
+run ends. ``arun`` drives the graph with ``astream``.
 """
 
 from __future__ import annotations
@@ -17,9 +22,9 @@ import time
 from contextlib import contextmanager
 from typing import Any, ClassVar, Iterator
 
-from agenttest.adapters._langchain_tools import langchain_tool_mocks
+from agenttest.adapters._langchain_tools import ToolRun, current_tool_log, langchain_tool_mocks
 from agenttest.adapters.base import BaseAdapter, call_agent
-from agenttest.core.trace import record_step
+from agenttest.core.trace import current_trace, record_step
 
 __all__ = ["LangGraphAdapter"]
 
@@ -56,21 +61,26 @@ class LangGraphAdapter(BaseAdapter):
     def invoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
         if not hasattr(agent, "stream"):
             return call_agent(agent, *args, **kwargs)
+        run = _GraphRun(self)
+        try:
+            for chunk in agent.stream(*args, stream_mode="updates", **kwargs):
+                run.on_chunk(chunk)
+        finally:
+            run.close()
+        return run.state
 
-        state: dict[str, Any] = {}
-        last = time.perf_counter()
-        for chunk in agent.stream(*args, stream_mode="updates", **kwargs):
-            now = time.perf_counter()
-            if not isinstance(chunk, dict):
-                continue
-            for node, update in chunk.items():
-                self._record_node(node, update, (now - last) * 1000)
-                if isinstance(update, dict):
-                    state.update(update)
-            last = now
-        return state
+    async def ainvoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
+        if not hasattr(agent, "astream"):
+            return await super().ainvoke(agent, *args, **kwargs)
+        run = _GraphRun(self)
+        try:
+            async for chunk in agent.astream(*args, stream_mode="updates", **kwargs):
+                run.on_chunk(chunk)
+        finally:
+            run.close()
+        return run.state
 
-    def _record_node(self, node: str, update: Any, duration_ms: float) -> None:
+    def _record_node(self, node: str, update: Any, duration_ms: float) -> set[str]:
         messages = _messages_in(update)
         input_tokens = output_tokens = 0
         requested: list[str] = []
@@ -83,6 +93,7 @@ class LangGraphAdapter(BaseAdapter):
                 if tool_name:
                     requested.append(tool_name)
 
+        tool_call_ids: set[str] = set()
         record_step(
             "node",
             node,
@@ -94,6 +105,8 @@ class LangGraphAdapter(BaseAdapter):
         )
         for message in messages:
             if getattr(message, "type", None) == "tool":
+                if getattr(message, "tool_call_id", None):
+                    tool_call_ids.add(message.tool_call_id)
                 failed = getattr(message, "status", None) == "error"
                 content = getattr(message, "content", None)
                 record_step(
@@ -103,3 +116,66 @@ class LangGraphAdapter(BaseAdapter):
                     error=str(content) if failed else None,
                     metadata={"tool_call_id": getattr(message, "tool_call_id", None), "node": node},
                 )
+        return tool_call_ids
+
+
+def _record_tool_run(run: ToolRun, **metadata: Any) -> None:
+    record_step(
+        "tool",
+        run.name,
+        input=run.input,
+        output=run.output,
+        error=run.error,
+        duration_ms=run.duration_ms,
+        metadata={"tool_call_id": run.tool_call_id, **run.metadata, **metadata},
+    )
+
+
+def _annotate_tool_step(run: ToolRun) -> None:
+    """Add what the tool-run log knows (input, mock type) to the ToolMessage step."""
+    trace = current_trace()
+    if trace is None:
+        return
+    for step in reversed(trace.tool_calls):
+        if step.metadata.get("tool_call_id") == run.tool_call_id:
+            if step.input is None:
+                step.input = run.input
+            step.metadata.update(run.metadata)
+            return
+
+
+class _GraphRun:
+    """Turns one stream of node updates into trace steps."""
+
+    def __init__(self, adapter: LangGraphAdapter) -> None:
+        self.adapter = adapter
+        self.state: dict[str, Any] = {}
+        self.log = current_tool_log()
+        self.seen_ids: set[str] = set()
+        self.last = time.perf_counter()
+
+    def on_chunk(self, chunk: Any) -> None:
+        now = time.perf_counter()
+        if not isinstance(chunk, dict):
+            return
+        for node, update in chunk.items():
+            self.seen_ids |= self.adapter._record_node(node, update, (now - self.last) * 1000)
+            if isinstance(update, dict):
+                self.state.update(update)
+            # Runs without a tool_call_id never get a ToolMessage: they were
+            # called directly by the node that just finished.
+            if self.log is not None:
+                for run in self.log.take(lambda r: r.tool_call_id is None or r.tool_call_id in self.seen_ids):
+                    if run.tool_call_id is None:
+                        _record_tool_run(run, node=node)
+                    else:
+                        _annotate_tool_step(run)
+        self.last = now
+
+    def close(self) -> None:
+        """Record tool runs whose ToolMessage never arrived (e.g. the graph crashed)."""
+        if self.log is None:
+            return
+        for run in self.log.take():
+            if run.tool_call_id not in self.seen_ids:
+                _record_tool_run(run, unreported=True)

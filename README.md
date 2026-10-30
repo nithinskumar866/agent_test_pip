@@ -46,7 +46,8 @@ def test_agent_is_factual_and_efficient():
 CrewAI `Crew` — and returns an `AgentResult` with the output, a step-by-step
 `trace`, tools called, tokens and latency. Agent exceptions never escape: check
 `result.success` / `result.error`, or call `result.raise_for_error()`.
-Use `await agenttest.arun(...)` in async tests.
+Use `await agenttest.arun(...)` in async tests: it drives each framework through its
+native async API, so a timeout cancels the run instead of abandoning a thread.
 
 For framework-less agents, decorate tools with `@agenttest.tool` so their calls
 are traced. A run where a tool failed but the agent still answered is reported
@@ -71,13 +72,25 @@ pytest
 
 ## 🛠️ Supported Frameworks
 
-| Framework | Status | Trace Capture | Tool Mocking | Token Tracking |
-| :--- | :---: | :---: | :---: | :---: |
-| **LangGraph** | ✅ | ✅ | ✅ | ⚠️ (0) |
-| **CrewAI** | ✅ | ✅ | ✅ | ⚠️ (0) |
-| **OpenAI Agents SDK** | ✅ | ✅ | ✅ | ✅ |
-| **Anthropic SDK** | ✅ | ✅ | ✅ | ✅ |
-| **Generic Python Agent** | ✅ | ✅ | ✅ | ⚠️ (0) |
+| Framework | Pass to `run` | Trace Capture | Tool Mocking | Token Tracking | Native `arun` |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **LangGraph** | compiled graph | nodes + tools | LangChain tools | per node (`usage_metadata`) | `astream` |
+| **CrewAI** | `Crew` | tasks + tools | CrewAI tools | crew total, on the last step | `akickoff` |
+| **OpenAI Agents SDK** | `Agent` | model responses + tools | function tools, incl. handoff and `as_tool` agents | per response | `Runner.run` |
+| **Anthropic SDK** | your tool loop (`adapter="anthropic"`) | `messages.create` calls | `@agenttest.tool` | per call | async client |
+| **Generic Python Agent** | any callable | `@agenttest.tool` | `@agenttest.tool` | — | `async def` agents |
+
+Each framework is tested end to end against its real SDK, with only the model scripted
+(LangGraph 1.x, OpenAI Agents SDK 0.24, CrewAI 1.15, Anthropic SDK 2.3).
+
+Notes:
+
+- **LangGraph** — a tool called directly inside a node is traced too, and so is a mocked
+  failure that crashes the graph (`metadata["unreported"]`).
+- **CrewAI** retries a failing tool on its own before the agent sees the error, so a
+  `mock_tool_failure` handle usually counts several calls.
+- **OpenAI** — tools the SDK resolves at run time (MCP servers) cannot be mocked. A crashed
+  run keeps whatever the SDK attached to the exception.
 
 ---
 

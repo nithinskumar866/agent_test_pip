@@ -3,7 +3,8 @@
 Each task output becomes a ``node`` step named after the agent role that
 produced it; the crew's aggregate token usage is attached to the last step.
 Tool calls are traced (and mocks applied) by patching CrewAI's tool classes
-for the duration of the run.
+for the duration of the run. ``arun`` uses the native ``akickoff`` (falling
+back to ``kickoff_async`` on older CrewAI).
 """
 
 from __future__ import annotations
@@ -57,6 +58,14 @@ def _traced_run(original: Any) -> Any:
     return run
 
 
+def _as_inputs(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """``run(crew, {"topic": ...})`` passes the dict as ``inputs=``."""
+    if args and "inputs" not in kwargs:
+        kwargs = {**kwargs, "inputs": args[0]}
+        args = args[1:]
+    return args, kwargs
+
+
 class CrewAIAdapter(BaseAdapter):
     """Adapter for CrewAI crews."""
 
@@ -96,9 +105,17 @@ class CrewAIAdapter(BaseAdapter):
     def invoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
         if not hasattr(agent, "kickoff"):
             return call_agent(agent, *args, **kwargs)
-        if args and "inputs" not in kwargs:
-            kwargs["inputs"], args = args[0], args[1:]
+        args, kwargs = _as_inputs(args, kwargs)
         result = agent.kickoff(*args, **kwargs)
+        self._record(result)
+        return result
+
+    async def ainvoke(self, agent: Any, *args: Any, **kwargs: Any) -> Any:
+        kickoff = getattr(agent, "akickoff", None) or getattr(agent, "kickoff_async", None)
+        if kickoff is None:
+            return await super().ainvoke(agent, *args, **kwargs)
+        args, kwargs = _as_inputs(args, kwargs)
+        result = await kickoff(*args, **kwargs)
         self._record(result)
         return result
 
