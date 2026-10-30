@@ -4,162 +4,94 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import threading
 from typing import Any, Final
 
 from pydantic import BaseModel, Field, PrivateAttr
 
-from agenttest.config import AgentTestConfigError, AgentTestError, _load_config
+from agenttest.config import AgentTestConfigError, AgentTestError, AgentTestJudgeError, _load_config
 from agenttest.core.trace import Trace
+from agenttest.judge.protocol import JUDGE_SYSTEM_PROMPT, current_judge
+from agenttest.judge.providers import DEFAULT_MODELS, PROVIDERS, call_judge
 
-__all__ = ["AgentResult", "DEFAULT_JUDGE_MODEL", "_judge_llm", "_clear_judge_cache"]
+__all__ = ["AgentResult", "DEFAULT_JUDGE_MODEL", "_judge_llm", "_clear_judge_cache", "_discard_cached"]
 
-DEFAULT_JUDGE_MODEL: Final[str] = "claude-haiku-4-5-20251001"
+DEFAULT_JUDGE_MODEL: Final[str] = DEFAULT_MODELS["anthropic"]
+
+#: Default reply budget; verdicts are short, grounding reports ask for more.
+_DEFAULT_MAX_TOKENS: Final[int] = 256
 
 _JUDGE_CACHE: dict[str, str] = {}
 _CACHE_LOCK: Final[threading.Lock] = threading.Lock()
 _JUDGE_CACHE_LOCK: Final[threading.Lock] = _CACHE_LOCK
 
 
-def _judge_llm(prompt: str) -> str:
+def _judge_settings() -> dict[str, Any]:
     try:
-        config = _load_config()
+        return _load_config()
     except AgentTestConfigError:
-        config = {}
+        return {}
 
+
+def _cache_key(prompt: str, max_tokens: int) -> str:
+    config = _judge_settings()
     provider = config.get("judge_provider", "anthropic")
-    model = config.get("judge_model", DEFAULT_JUDGE_MODEL)
+    model = config.get("judge_model") or DEFAULT_MODELS.get(provider, "")
+    return hashlib.sha256(f"{provider}:{model}:{max_tokens}:{JUDGE_SYSTEM_PROMPT}:{prompt}".encode()).hexdigest()
 
-    # Thread-safe cache
-    cache_key = hashlib.sha256(
-        f"{provider}:{model}:{prompt}".encode()
-    ).hexdigest()
 
-    with _CACHE_LOCK:
-        if cache_key in _JUDGE_CACHE:
-            return _JUDGE_CACHE[cache_key]
+def _judge_llm(prompt: str, *, max_tokens: int = _DEFAULT_MAX_TOKENS) -> str:
+    """Send ``prompt`` to the judge and return its reply.
 
-    if provider == "anthropic":
-        result = _judge_anthropic(prompt, model)
-    elif provider == "openai":
-        result = _judge_openai(prompt, model)
-    elif provider == "gemini":
-        result = _judge_gemini(prompt, model)
-    elif provider == "ollama":
-        result = _judge_ollama(prompt, model)
-    elif provider == "none":
+    The single gateway to the judge: a judge installed with
+    :func:`agenttest.use_judge` takes precedence; otherwise the provider from
+    ``agenttest.config.json`` is called (see :mod:`agenttest.judge.providers`
+    for retries and error handling). Provider replies are cached per session.
+    """
+    custom = current_judge()
+    if custom is not None:
+        reply = custom(prompt, JUDGE_SYSTEM_PROMPT)
+        if not isinstance(reply, str) or not reply.strip():
+            raise AgentTestJudgeError("Custom judge returned an empty reply.")
+        return reply.strip()
+
+    config = _judge_settings()
+    provider = config.get("judge_provider", "anthropic")
+    if provider == "none":
         raise AgentTestConfigError(
             "LLM judge is disabled (judge_provider=none). "
             "Use structural assertions like word_count_between() "
             "instead, or set a judge provider in agenttest init."
         )
-    else:
+    if provider not in PROVIDERS:
         raise AgentTestConfigError(
             f"Unknown judge_provider: '{provider}'. "
             "Valid options: anthropic, openai, gemini, ollama, none"
         )
 
+    key = _cache_key(prompt, max_tokens)
     with _CACHE_LOCK:
-        _JUDGE_CACHE[cache_key] = result
-    return result
+        if key in _JUDGE_CACHE:
+            return _JUDGE_CACHE[key]
 
-
-def _judge_anthropic(prompt: str, model: str) -> str:
-    import os
-    try:
-        import anthropic
-    except ImportError:
-        raise AgentTestConfigError(
-            "anthropic package not installed. Run: pip install anthropic"
-        )
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise AgentTestConfigError(
-            "ANTHROPIC_API_KEY environment variable not set. "
-            "Set it with: export ANTHROPIC_API_KEY=your_key"
-        )
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model or DEFAULT_JUDGE_MODEL,
-        max_tokens=50,
-        messages=[{"role": "user", "content": prompt}]
+    reply = call_judge(
+        provider,
+        config.get("judge_model"),
+        prompt,
+        system=JUDGE_SYSTEM_PROMPT,
+        max_tokens=max_tokens,
+        max_retries=int(config.get("judge_max_retries", 2)),
+        timeout=float(config.get("judge_timeout", 60.0)),
     )
-    return response.content[0].text.strip()
+    with _CACHE_LOCK:
+        _JUDGE_CACHE[key] = reply
+    return reply
 
 
-def _judge_openai(prompt: str, model: str) -> str:
-    import os
-    try:
-        import openai
-    except ImportError:
-        raise AgentTestConfigError(
-            "openai package not installed. Run: pip install openai"
-        )
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise AgentTestConfigError(
-            "OPENAI_API_KEY environment variable not set. "
-            "Set it with: export OPENAI_API_KEY=your_key"
-        )
-    client = openai.OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model or "gpt-4o-mini",
-        max_tokens=50,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content.strip()
-
-
-def _judge_gemini(prompt: str, model: str) -> str:
-    import os
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        raise AgentTestConfigError(
-            "google-generativeai not installed. "
-            "Run: pip install google-generativeai"
-        )
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise AgentTestConfigError(
-            "GOOGLE_API_KEY environment variable not set. "
-            "Set it with: export GOOGLE_API_KEY=your_key"
-        )
-    genai.configure(api_key=api_key)
-    gemini_model = genai.GenerativeModel(model or "gemini-1.5-flash")
-    response = gemini_model.generate_content(prompt)
-    return response.text.strip()
-
-
-def _judge_ollama(prompt: str, model: str) -> str:
-    try:
-        import httpx
-    except ImportError:
-        raise AgentTestConfigError(
-            "httpx not installed. Run: pip install httpx"
-        )
-    try:
-        response = httpx.post(
-            "http://localhost:11434/api/generate",
-            json={
-                "model": model or "llama3",
-                "prompt": prompt,
-                "stream": False
-            },
-            timeout=30.0
-        )
-        response.raise_for_status()
-        return response.json()["response"].strip()
-    except httpx.ConnectError:
-        raise AgentTestConfigError(
-            "Cannot connect to Ollama at localhost:11434. "
-            "Make sure Ollama is running: ollama serve"
-        )
-    except Exception as exc:
-        raise AgentTestConfigError(
-            f"Ollama request failed: {exc}"
-        ) from exc
+def _discard_cached(prompt: str, *, max_tokens: int = _DEFAULT_MAX_TOKENS) -> None:
+    """Forget a cached reply (used when it turned out to be malformed)."""
+    with _CACHE_LOCK:
+        _JUDGE_CACHE.pop(_cache_key(prompt, max_tokens), None)
 
 
 def _clear_judge_cache() -> None:
@@ -252,6 +184,15 @@ class AgentResult(BaseModel):
 
             self._hallucination_cache = hallucination_score(self.output)
         return self._hallucination_cache
+
+    def check_grounding(self, context: Any = None) -> Any:
+        """Check the output's claims against ``context`` (default: this run's tool outputs).
+
+        Returns a :class:`~agenttest.judge.GroundingReport`.
+        """
+        from agenttest.assertions.semantic import check_grounding
+
+        return check_grounding(self, context)
 
     def tone_matches(self, tone: str) -> bool:
         """Check whether the output is written in a requested tone."""

@@ -84,6 +84,10 @@ class AgentTestConfig(BaseModel):
     runs: int = Field(default=1, ge=1)
     #: Fraction of runs that must pass.
     min_pass_rate: float = Field(default=1.0, gt=0.0, le=1.0)
+    #: Retries for transient judge API failures (timeouts, 429, 5xx).
+    judge_max_retries: int = Field(default=2, ge=0)
+    #: Seconds before one judge API call is abandoned.
+    judge_timeout: float = Field(default=60.0, gt=0.0)
 
     @field_validator("framework")
     @classmethod

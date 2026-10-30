@@ -4,9 +4,11 @@
 from agenttest.assertions.semantic import (
     assert_answers_question,
     assert_contains_fact,
+    assert_grounded,
     assert_hallucination_score,
     assert_language_matches,
     assert_tone_matches,
+    check_grounding,
 )
 from agenttest.assertions.structural import (
     assert_gracefully_degraded,
@@ -33,6 +35,7 @@ from agenttest.core.decorator import agent_test
 from agenttest.core.result import AgentResult
 from agenttest.core.runner import arun, run
 from agenttest.core.trace import Step, Trace, current_trace, tool
+from agenttest.judge import ClaimVerdict, GroundingReport, use_judge
 from agenttest.mocks import (
     MockedToolError,
     MockHandle,
@@ -63,6 +66,11 @@ __all__ = [
     "mock_tool_failure",
     "mock_tool_response",
     "mock_tool_latency",
+    "use_judge",
+    "GroundingReport",
+    "ClaimVerdict",
+    "check_grounding",
+    "assert_grounded",
     "assert_contains_fact",
     "assert_hallucination_score",
     "assert_tone_matches",

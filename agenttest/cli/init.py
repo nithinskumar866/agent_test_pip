@@ -58,7 +58,7 @@ def init(framework: str | None, judge: str | None) -> None:
 
     # Judge model defaults per provider
     judge_model_defaults = {
-        "anthropic": "claude-haiku-4-5-20251001",
+        "anthropic": "claude-haiku-5-5",
         "openai": "gpt-4o-mini",
         "gemini": "gemini-1.5-flash",
         "ollama": "llama3",

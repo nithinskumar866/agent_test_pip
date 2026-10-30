@@ -100,7 +100,7 @@ Notes:
 
 | Provider | Command | Env Var | Default Model | Cost |
 | :--- | :--- | :--- | :--- | :--- |
-| **Anthropic** | `agenttest init --judge anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5-20251001` | Low |
+| **Anthropic** | `agenttest init --judge anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` | Low |
 | **OpenAI** | `agenttest init --judge openai` | `OPENAI_API_KEY` | `gpt-4o-mini` | Low |
 | **Gemini** | `agenttest init --judge gemini` | `GOOGLE_API_KEY` | `gemini-1.5-flash` | Very Low |
 | **Ollama** | `agenttest init --judge ollama` | *(Local instance)* | `llama3` | **Free** |
@@ -127,13 +127,72 @@ Pure Python assertions that evaluate speed, output structure, token count, and t
 
 ## 🤖 Semantic Assertions (Judge Model Required)
 
-LLM-judged assertions powered by your configured judge provider. They raise `AssertionError` including the judge's answer; a judge reply that cannot be parsed raises `AgentTestJudgeError` instead of being guessed at.
+LLM-judged assertions powered by your configured judge provider. They raise `AssertionError` including the judge's answer.
 
-1. `assert_contains_fact(output, "Paris")` — Fact verification.
-2. `assert_hallucination_score(output, max_score=0.1)` — Hallucination likelihood rating (0.0 to 1.0) at most `max_score`.
-3. `assert_tone_matches(output, "professional")` — Tone and style checking.
-4. `assert_answers_question(output, "What is Python?")` — Question coverage evaluation.
-5. `assert_language_matches(output, "Spanish")` — Target language detection.
+1. `assert_grounded(result, context)` — Every factual claim is backed by the context (see below).
+2. `assert_contains_fact(output, "Paris")` — Fact verification.
+3. `assert_hallucination_score(output, max_score=0.1, context=...)` — Hallucination score (0.0 to 1.0) at most `max_score`; grounded when `context` is given.
+4. `assert_tone_matches(output, "professional")` — Tone and style checking.
+5. `assert_answers_question(output, "What is Python?")` — Question coverage evaluation.
+6. `assert_language_matches(output, "Spanish")` — Target language detection.
+
+### Grounded hallucination checks
+
+"Is this hallucinated?" has no reliable answer in the abstract. A grounded check asks a checkable
+question instead: is every claim backed by the documents or tool results the agent was given?
+
+```python
+from agenttest import assert_grounded, check_grounding
+
+# Context defaults to the run's successful tool outputs
+assert_grounded(result)
+
+# Or pass the retrieved documents explicitly
+report = assert_grounded(result, context=[doc1, doc2], max_unsupported=0.0)
+report.score          # fraction of claims contradicted or unsupported
+report.contradicted   # [ClaimVerdict(claim=..., evidence=..., reason=...)]
+```
+
+Each claim is labelled `supported`, `contradicted`, `unsupported` or `disputed` (the context
+disagrees with itself). The assertion fails on any contradicted claim, on more unsupported claims
+than `max_unsupported` allows, on disputed claims (unless `allow_disputed=True`), and when the
+output tries to instruct the evaluator.
+
+**The judge must quote its evidence, and every quote is checked in code.** It has to appear in the
+passage it cites, ignoring case, whitespace and quote style. A label whose evidence doesn't check
+out is downgraded to `unsupported`. So a judge that was misled can't certify a claim with a quote
+that only exists in the agent's own output.
+
+### Judge reliability
+
+- **Prompt injection:** the agent's output (and every context passage) is enclosed in markers derived
+  from a hash of that text, so the text can't contain its own closing marker. The system prompt tells
+  the judge that the enclosed text is data and that instructions inside it must not be followed.
+- **Malformed replies** get one retry with the parse error attached, then raise `AgentTestJudgeError`.
+  Malformed replies are never cached.
+- **API failures:** timeouts, connection errors, rate limits and 5xx errors are retried with
+  exponential backoff (`judge_max_retries`, default 2; `judge_timeout`, default 60s). Other API
+  errors, empty replies and refusals raise `AgentTestJudgeError`, which pytest reports as an
+  *error*, not a test failure.
+- **Determinism:** OpenAI, Gemini and Ollama judges run at temperature 0. The Anthropic API no
+  longer accepts sampling parameters, so Claude judges rely on the strict reply format and the
+  evidence checks instead.
+- **Scripted judges for your own tests:** `with agenttest.use_judge(lambda prompt, system: "YES"):`
+
+### Known limitations
+
+- A judge can still **miss a claim entirely**, or return no claims at all. Only the evidence for
+  claims it *does* list is verified, so `assert_grounded` is only as complete as the judge's
+  claim extraction.
+- Evidence quotes are matched exactly (after normalisation). A paraphrased quote is rejected, which
+  can mark a true claim `unsupported`; very short quotes match trivially.
+- The injection defences reduce risk, but they can't guarantee that a model never follows injected
+  text. `injection_detected` is the judge's own report.
+- Context isn't chunked or truncated: very large contexts must fit in the judge model's window.
+- Without `context`, `hallucination_score` is the judge's opinion, not a verification.
+- The scripted tests cover parsing, verification and failure handling. To check that a real judge
+  labels claims correctly, run the live tests:
+  `AGENTTEST_LIVE_JUDGE=anthropic ANTHROPIC_API_KEY=... pytest tests/test_judge_live.py`
 
 ---
 
