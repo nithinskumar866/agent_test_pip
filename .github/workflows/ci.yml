@@ -64,6 +64,21 @@ jobs:
       - run: pip install -e ".[all]"
       - run: python -m pytest -q tests/test_integrations_real.py tests/test_integrations_e2e.py -rs
 
+  newest-openai-agents:
+    # The newest openai-agents needs openai 3, which the [all] install can't
+    # currently resolve alongside CrewAI, so it gets its own job.
+    name: Framework integrations (newest OpenAI Agents SDK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[openai-agents]"
+      - run: pip list | grep -iE "^(openai|openai-agents) "
+      - run: python -m pytest -q tests/test_integrations_real.py tests/test_integrations_e2e.py -rs
+
   package:
     name: Build and verify the package
     runs-on: ubuntu-latest

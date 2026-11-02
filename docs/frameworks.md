@@ -9,7 +9,11 @@
 | **Plain Python** | any callable | `@agenttest.tool` | `@agenttest.tool` | - | `async def` agents |
 
 Each integration is tested end to end against its real SDK, with only the model scripted: LangGraph
-1.x, OpenAI Agents SDK 0.24, CrewAI 1.15 and Anthropic SDK 2.3.
+1.2, CrewAI 1.15, Anthropic SDK 2.3, and the OpenAI Agents SDK at both 0.20 and 0.24.
+
+The newest OpenAI Agents SDK needs `openai` 3, while installing `pytest-agenttest[all]` currently
+resolves to `openai` 2 and OpenAI Agents SDK 0.20. To get the newest version, install
+`pytest-agenttest[openai-agents]` without the `crewai` extra.
 
 ## LangGraph
 

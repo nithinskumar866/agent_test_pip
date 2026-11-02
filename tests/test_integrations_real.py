@@ -207,7 +207,9 @@ def test_openai_failure_mock_uses_sdk_default_error_message():
     assert result.success, result.traceback
     from agents import default_tool_error_function
 
-    assert result.output == f"Answer based on: {default_tool_error_function(None, RuntimeError())}"
+    # Whether the default message includes the error text differs between SDK versions.
+    expected = default_tool_error_function(None, RuntimeError("weather API down"))
+    assert result.output == f"Answer based on: {expected}"
     assert result.trace.tool_calls[0].error == "MockedToolError: weather API down"
     assert result.gracefully_degraded is True
 
