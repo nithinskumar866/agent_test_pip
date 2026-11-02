@@ -97,7 +97,7 @@ jobs:
           /tmp/wheel-env/bin/agenttest --version
           mkdir /tmp/examples && cp examples/*.py /tmp/examples/
           cd /tmp/examples && /tmp/wheel-env/bin/python -m pytest -q
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
