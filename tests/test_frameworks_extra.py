@@ -280,6 +280,7 @@ def test_openai_tool_called_with_reads_json_arguments():
 
 
 def test_openai_nested_agent_tools_are_traced():
+    pytest.importorskip("agents")
     from agents import Agent
 
     inner = Agent(name="inner", instructions="-", tools=[_weather()],
@@ -296,6 +297,7 @@ def test_openai_nested_agent_tools_are_traced():
 
 
 def test_openai_records_the_model_name():
+    pytest.importorskip("agents")
     from agents import Agent
 
     agent = Agent(name="n", instructions="-", model="claude-haiku-5-5")
@@ -382,6 +384,7 @@ def test_mcp_tool_failure_mock_is_recorded():
 
 
 def test_openai_conversation_uses_the_sdk_input_list():
+    pytest.importorskip("agents")
     from agents import Agent
 
     seen = []
