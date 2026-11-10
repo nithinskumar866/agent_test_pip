@@ -1,7 +1,7 @@
 """Live checks of judge behaviour against a real model (opt-in, costs API credits).
 
 Skipped unless ``AGENTTEST_LIVE_JUDGE`` is set to a provider name
-(``anthropic`` or ``openai``) and that provider's API key is present. These
+(``anthropic``, ``openai``, ``gemini`` or ``ollama``) and its API key is present. These
 are the cases the scripted tests cannot prove: that a real judge labels
 claims correctly and is not talked into a verdict by an injected output.
 
@@ -18,11 +18,11 @@ from agenttest.assertions import semantic as sem
 from agenttest.core.result import _clear_judge_cache
 
 PROVIDER = os.getenv("AGENTTEST_LIVE_JUDGE", "")
-KEYS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+KEYS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "gemini": "GOOGLE_API_KEY", "ollama": None}
 
 pytestmark = pytest.mark.skipif(
-    PROVIDER not in KEYS or not os.getenv(KEYS.get(PROVIDER, ""), ""),
-    reason="set AGENTTEST_LIVE_JUDGE=anthropic|openai and the provider's API key to run live judge tests",
+    PROVIDER not in KEYS or (KEYS[PROVIDER] is not None and not os.getenv(KEYS[PROVIDER], "")),
+    reason="set AGENTTEST_LIVE_JUDGE=anthropic|openai|gemini|ollama and the provider's API key",
 )
 
 CONTEXT = [

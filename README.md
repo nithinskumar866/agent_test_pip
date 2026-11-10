@@ -20,7 +20,7 @@ agenttest doctor             # check the config, framework packages and judge AP
 ```
 
 The package is published as `pytest-agenttest`; you `import agenttest` and run the `agenttest`
-command. Add `[langgraph]`, `[crewai]` or `[openai-agents]` for those frameworks, or `[all]`.
+command. Add `[langgraph]`, `[crewai]`, `[openai-agents]`, `[pydantic-ai]` or `[llamaindex]` for those frameworks, or `[all]`.
 
 ## Quick start
 
@@ -62,8 +62,12 @@ pytest --agenttest-html=agenttest-report.html
   an OpenAI Agents SDK `Agent`, a CrewAI `Crew` or an Anthropic SDK tool loop. They return an
   `AgentResult` with the output, a step-by-step trace, tools, tokens and latency. The agent's
   exceptions never escape; timeouts are built in.
-- **Tool mocking across frameworks.** `mock_tool_failure`, `mock_tool_response` and `mock_tool_latency`
-  match tools by name in every supported framework. A mocked failure is handled exactly like a real one.
+- **Tool failure simulation across frameworks.** Make a tool fail, fail once and recover, return canned data,
+  answer based on its arguments, or run slowly, by name, in every supported framework. A mocked failure is
+  handled exactly like a real one.
+- **Conversations.** `agenttest.converse` tests multi-turn behaviour, with scripted or simulated users.
+- **Record and replay.** `@agent_test(cassette=True)` records model calls once and replays them, so tests
+  are fast, free and repeatable in CI.
 - **Grounded hallucination checks.** `assert_grounded` checks each claim against the documents or tool
   results the agent had. The judge must quote its evidence, and every quote is verified in code.
 - **A judge you can rely on.** Defences against prompt injection from agent output, a repair retry for
@@ -71,7 +75,9 @@ pytest --agenttest-html=agenttest-report.html
 - **Statistics for non-deterministic agents.** `@agent_test(runs=5, min_pass_rate=0.8, max_retries=1)`
   stops as soon as the verdict is certain, and reports flaky tests.
 - **Useful failures and reports.** A failing test shows a trace of every agent run it made. Add
-  `--agenttest-report` (JSON) or `--agenttest-html` for CI artifacts.
+  `--agenttest-report` (JSON) or `--agenttest-html` for CI artifacts, with secrets hidden.
+- **Regression tracking and budgets.** `agenttest compare` flags what got worse, a GitHub Action comments on
+  pull requests, and token and cost budgets stop runaway tests.
 - **Assertions that explain themselves.** Every `assert_*` raises `AssertionError` with the expected
   value, the actual value and an excerpt of the output.
 
@@ -81,7 +87,9 @@ pytest --agenttest-html=agenttest-report.html
 | :--- | :---: | :---: | :---: |
 | LangGraph | nodes + tools | LangChain tools | `astream` |
 | CrewAI | tasks + tools | CrewAI tools | `akickoff` |
-| OpenAI Agents SDK | model responses + tools | function tools, incl. handoffs and `as_tool` agents | `Runner.run` |
+| OpenAI Agents SDK | model responses + tools | function and MCP tools, incl. handoffs and `as_tool` agents | `Runner.run` |
+| Pydantic AI | model responses + tools | function tools | `Agent.run` |
+| LlamaIndex | tools | `FunctionTool` | `agent.run` |
 | Anthropic SDK | `messages.create` calls | `@agenttest.tool` | async client |
 | Plain Python | `@agenttest.tool` | `@agenttest.tool` | `async def` agents |
 
@@ -90,12 +98,14 @@ and limitations are in [docs/frameworks.md](docs/frameworks.md).
 
 ## Documentation
 
+- [See it in action](docs/demo.md)
 - [Getting started](docs/getting-started.md)
 - [Running agents](docs/running-agents.md): `run`, `arun`, `AgentResult`, timeouts, retries, async tests, custom adapters
 - [Frameworks](docs/frameworks.md)
 - [Assertions](docs/assertions.md)
 - [The judge and grounded hallucination checks](docs/judge.md), including known limitations
 - [Tool mocking](docs/mocking.md)
+- [Conversations](docs/conversations.md), [record and replay](docs/replay.md), [datasets](docs/datasets.md), [cost and budgets](docs/cost.md)
 - [Reports, the CLI and CI](docs/reports-and-ci.md), including the configuration reference
 - Runnable [examples](examples/)
 - [Releasing](docs/releasing.md) and [security](SECURITY.md)

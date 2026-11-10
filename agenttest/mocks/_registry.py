@@ -17,13 +17,14 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import json
 import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 __all__ = [
     "MOCK_REGISTRY",
@@ -38,7 +39,37 @@ __all__ = [
     "pop_mock",
 ]
 
-MockType = Literal["failure", "response", "latency"]
+MockType = Literal["failure", "response", "latency", "sequence", "handler"]
+
+
+class _Real:
+    """Sentinel: let this call reach the real tool."""
+
+    def __repr__(self) -> str:
+        return "agenttest.REAL"
+
+
+#: Use in ``mock_tool_sequence`` to let a call through to the real tool.
+REAL: Final = _Real()
+
+
+def tool_args(value: Any) -> dict[str, Any]:
+    """A tool call's arguments as a dict, whichever framework recorded them.
+
+    Handles keyword dicts, JSON strings (OpenAI Agents SDK) and LangChain
+    ``ToolCall`` dicts. Anything else becomes ``{"input": value}``.
+    """
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return {"input": value}
+        return parsed if isinstance(parsed, dict) else {"input": parsed}
+    if isinstance(value, dict):
+        if isinstance(value.get("args"), dict) and "name" in value:  # a LangChain ToolCall
+            return value["args"]
+        return value
+    return {} if value in (None, [], ()) else {"input": value}
 
 
 class MockedToolError(RuntimeError):
@@ -60,6 +91,11 @@ class MockHandle:
     exception: BaseException | builtins.type[BaseException] | None = None
     data: Any = None
     delay: float = 0.0
+    #: Stop intercepting after this many calls (the real tool runs afterwards).
+    times: int | None = None
+    outcomes: list[Any] = field(default_factory=list)
+    then: Any = REAL
+    handler: Callable[[dict[str, Any]], Any] | None = None
     calls: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
@@ -73,13 +109,28 @@ class MockHandle:
             spec["error"] = self.error
         elif self.type == "response":
             spec["data"] = self.data
-        else:
+        elif self.type == "latency":
             spec["delay"] = self.delay
         return spec
 
-    def _hit(self) -> None:
+    def _take(self) -> int | None:
+        """Claim this call: its 0-based position, or ``None`` once ``times`` is used up."""
         with self._lock:
+            if self.times is not None and self.calls >= self.times:
+                return None
             self.calls += 1
+            return self.calls - 1
+
+    def _outcome(self, position: int, input: Any) -> Any:
+        """What this call does: a value to return, an exception to raise, or ``REAL``."""
+        if self.type == "failure":
+            return self._exception()
+        if self.type == "response":
+            return self.data
+        if self.type == "handler":
+            assert self.handler is not None
+            return self.handler(tool_args(input))
+        return self.outcomes[position] if position < len(self.outcomes) else self.then
 
     def _exception(self) -> BaseException:
         exc = self.exception
@@ -165,41 +216,70 @@ def entering_tool(tool_name: str) -> Iterator[None]:
         _IN_TOOL.reset(token)
 
 
-def apply_mock(tool_name: str, call_real: Callable[[], Any]) -> Any:
+def _raise(outcome: BaseException | type[BaseException]) -> None:
+    exc = outcome() if isinstance(outcome, type) else outcome
+    exc._agenttest_mocked = True  # type: ignore[attr-defined]
+    raise exc
+
+
+def is_mocked_failure(exc: BaseException) -> bool:
+    """Whether ``exc`` was raised by a mock rather than by the real tool."""
+    return getattr(exc, "_agenttest_mocked", False)
+
+
+def _is_exception(value: Any) -> bool:
+    return isinstance(value, BaseException) or (isinstance(value, type) and issubclass(value, BaseException))
+
+
+def apply_mock(tool_name: str, call_real: Callable[[], Any], *, input: Any = None) -> Any:
     """Run a tool call, honouring any active mock for ``tool_name``.
 
     * failure  → raise the configured exception without calling the tool
     * response → return the canned data without calling the tool
     * latency  → sleep, then call the real tool
-    * no mock  → call the real tool
+    * sequence → the next scripted outcome
+    * handler  → whatever the function returns or raises for these arguments
+    * no mock, or a mock whose ``times`` ran out → call the real tool
     """
     if in_tool_call(tool_name):
         return call_real()
     with entering_tool(tool_name):
         handle = active_mock(tool_name)
-        if handle is None:
+        position = handle._take() if handle is not None else None
+        if handle is None or position is None:
             return call_real()
-        handle._hit()
-        if handle.type == "failure":
-            raise handle._exception()
-        if handle.type == "response":
-            return handle.data
-        time.sleep(handle.delay)
-        return call_real()
+        if handle.type == "latency":
+            time.sleep(handle.delay)
+            return call_real()
+        try:
+            outcome = handle._outcome(position, input)
+        except Exception as exc:  # raised by a handler
+            _raise(exc)
+        if outcome is REAL:
+            return call_real()
+        if _is_exception(outcome):
+            _raise(outcome)
+        return outcome
 
 
-async def apply_mock_async(tool_name: str, call_real: Callable[[], Awaitable[Any]]) -> Any:
+async def apply_mock_async(tool_name: str, call_real: Callable[[], Awaitable[Any]], *, input: Any = None) -> Any:
     """Async twin of :func:`apply_mock`; latency uses ``asyncio.sleep``."""
     if in_tool_call(tool_name):
         return await call_real()
     with entering_tool(tool_name):
         handle = active_mock(tool_name)
-        if handle is None:
+        position = handle._take() if handle is not None else None
+        if handle is None or position is None:
             return await call_real()
-        handle._hit()
-        if handle.type == "failure":
-            raise handle._exception()
-        if handle.type == "response":
-            return handle.data
-        await asyncio.sleep(handle.delay)
-        return await call_real()
+        if handle.type == "latency":
+            await asyncio.sleep(handle.delay)
+            return await call_real()
+        try:
+            outcome = handle._outcome(position, input)
+        except Exception as exc:  # raised by a handler
+            _raise(exc)
+        if outcome is REAL:
+            return await call_real()
+        if _is_exception(outcome):
+            _raise(outcome)
+        return outcome

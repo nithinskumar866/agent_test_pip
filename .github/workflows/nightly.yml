@@ -1,0 +1,34 @@
+name: Nightly (newest framework versions)
+
+# agenttest hooks into framework internals, so a new framework release can break
+# it. This installs the newest version of each one, separately, every night.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest:
+    name: Newest ${{ matrix.extra }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        extra: [langgraph, crewai, openai-agents, anthropic, pydantic-ai, llamaindex, gemini]
+    env:
+      CREWAI_DISABLE_TELEMETRY: "true"
+      OTEL_SDK_DISABLED: "true"
+      PYDANTIC_AI_NO_BANNER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install --upgrade -e ".[${{ matrix.extra }}]"
+      - run: pip list | grep -iE "langgraph|crewai|openai|anthropic|pydantic-ai|llama-index-core|google-genai" || true
+      - run: python -m pytest -q -rs tests/test_integrations_real.py tests/test_integrations_e2e.py tests/test_frameworks_extra.py tests/test_replay.py

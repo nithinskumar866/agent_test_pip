@@ -117,6 +117,19 @@ class BaseAdapter:
         """Turn the agent's raw result into its final text output."""
         return text_of(raw)
 
+    def turn_arguments(self, history: list[dict[str, str]], previous: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """How to call the agent for the next turn of a conversation.
+
+        Args:
+            history: Every message so far, ending with the new user message.
+            previous: The raw result of the previous turn (``None`` on the first).
+
+        Returns:
+            The ``(args, kwargs)`` for the call. By default the agent receives
+            the whole history as a list of ``{"role", "content"}`` messages.
+        """
+        return (history,), {}
+
     def run_with_trace(self, agent: Any, *args: Any, **kwargs: Any) -> AgentResult:
         """Run ``agent`` with this adapter. Shortcut for ``agenttest.run(agent, adapter=self)``."""
         from agenttest.core.runner import run

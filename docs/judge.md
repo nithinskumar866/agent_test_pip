@@ -6,7 +6,7 @@
 | :--- | :--- | :--- | :--- |
 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` |
-| Gemini | `gemini` | `GOOGLE_API_KEY` | `gemini-1.5-flash` |
+| Gemini | `gemini` | `GOOGLE_API_KEY` | `gemini-3.6-flash` |
 | Ollama | `ollama` | (local server) | `llama3` |
 | None | `none` | - | semantic assertions raise; structural ones work |
 
@@ -55,9 +55,10 @@ without real evidence from the context.
   They are never cached.
 - **API failures.** Timeouts, connection errors, rate limits (429) and server errors (5xx) are retried
   with exponential backoff. Other API errors, empty replies and refusals raise `AgentTestJudgeError`.
-- **Determinism.** OpenAI, Gemini and Ollama judges run at temperature 0. The Anthropic API no longer
-  accepts sampling parameters, so Claude judges rely on the strict reply formats and the evidence checks.
+- **Determinism.** OpenAI and Ollama judges run at temperature 0. Current Anthropic and Gemini models don't
+  accept sampling parameters, so those judges rely on the strict reply formats and the evidence checks.
 - **Caching.** Successful judge replies are cached for the session, keyed by provider, model and prompt.
+  Set `"judge_cache": true` to keep them on disk between sessions.
 
 Configure in `agenttest.config.json`:
 
@@ -67,6 +68,19 @@ Configure in `agenttest.config.json`:
 | `judge_model` | provider default | Model id. |
 | `judge_max_retries` | `2` | Retries for transient API failures. |
 | `judge_timeout` | `60` | Seconds per judge API call. |
+
+## How accurate is your judge?
+
+Measure it instead of assuming. `agenttest benchmark` runs 100 labelled cases through your configured judge,
+using invented facts so that it can't rely on its own knowledge:
+
+```bash
+agenttest benchmark --json benchmark.json --min-accuracy 0.9
+```
+
+It reports accuracy for correct answers, hallucinations, contradictions, self-contradicting sources and
+prompt injection, plus how often good answers were rejected and bad ones accepted. It makes real judge calls
+(about 100), so it costs money; `--limit 4` runs a 20-case sample.
 
 ## Testing your tests: scripted judges
 

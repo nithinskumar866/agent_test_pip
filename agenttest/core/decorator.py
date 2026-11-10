@@ -19,13 +19,15 @@ from __future__ import annotations
 import functools
 import inspect
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
 
-from agenttest.config import load_config
+from agenttest.config import AgentTestBudgetError, load_config
 from agenttest.core.retry import RetryPolicy, aexecute, execute
-from agenttest.core.runner import RunSettings, settings_scope
+from agenttest.core.runner import RunSettings, Usage, settings_scope
+from agenttest.replay import cassette_for
 
 __all__ = ["agent_test"]
 
@@ -38,6 +40,9 @@ def agent_test(
     runs: int | None = None,
     min_pass_rate: float | None = None,
     model_override: str | None = None,
+    max_tokens: int | None = None,
+    max_cost_usd: float | None = None,
+    cassette: bool | str | None = None,
 ) -> Callable[..., Any]:
     """Mark a function as an agent test.
 
@@ -56,6 +61,11 @@ def agent_test(
         runs: How many times to execute the test body.
         min_pass_rate: Fraction of runs that must pass (0 < rate <= 1).
         model_override: Judge model to use inside this test.
+        max_tokens: Fail the test once its agent runs have used more tokens than this.
+        max_cost_usd: Fail the test once its agent runs have cost more than this.
+        cassette: Record model API calls and replay them on later runs: ``True``
+            for a file next to the test, or a path relative to the test file.
+            See :mod:`agenttest.replay`.
 
     Note:
         Fixtures are created once per test, so every run and retry sees the
@@ -63,6 +73,10 @@ def agent_test(
     """
     if timeout is not None and timeout <= 0:
         raise ValueError("timeout must be positive")
+    if max_tokens is not None and max_tokens <= 0:
+        raise ValueError("max_tokens must be positive")
+    if max_cost_usd is not None and max_cost_usd <= 0:
+        raise ValueError("max_cost_usd must be positive")
     # Validate explicit values eagerly, so mistakes fail at import, not mid-suite.
     RetryPolicy(
         runs=1 if runs is None else runs,
@@ -83,13 +97,35 @@ def agent_test(
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         test_name = f"{fn.__module__}::{fn.__qualname__}"
 
+        def check_budget(usage: Usage) -> None:
+            if max_tokens is not None and usage.tokens > max_tokens:
+                raise AgentTestBudgetError(f"{test_name}: used {usage.tokens} tokens; the budget is {max_tokens}.")
+            if max_cost_usd is not None and not usage.priced:
+                raise AgentTestBudgetError(
+                    f"{test_name}: has a cost budget, but a model has no known price. "
+                    "Add it under 'pricing' in agenttest.config.json."
+                )
+            if max_cost_usd is not None and usage.cost_usd > max_cost_usd:
+                raise AgentTestBudgetError(
+                    f"{test_name}: cost ${usage.cost_usd:.6f}; the budget is ${max_cost_usd:g}."
+                )
+
+        def recording() -> Any:
+            return cassette_for(fn, cassette) if cassette else nullcontext()
+
         if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 settings, policy = resolve()
-                with settings_scope(settings):
-                    return await aexecute(test_name, policy, lambda: fn(*args, **kwargs))
+
+                async def body() -> Any:
+                    value = await fn(*args, **kwargs)
+                    check_budget(settings.usage)
+                    return value
+
+                with recording(), settings_scope(settings):
+                    return await aexecute(test_name, policy, body)
 
             wrapper: Callable[..., Any] = async_wrapper
         else:
@@ -97,8 +133,14 @@ def agent_test(
             @functools.wraps(fn)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
                 settings, policy = resolve()
-                with settings_scope(settings):
-                    return execute(test_name, policy, lambda: fn(*args, **kwargs))
+
+                def body() -> Any:
+                    value = fn(*args, **kwargs)
+                    check_budget(settings.usage)
+                    return value
+
+                with recording(), settings_scope(settings):
+                    return execute(test_name, policy, body)
 
             wrapper = sync_wrapper
 

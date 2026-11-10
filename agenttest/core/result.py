@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
+from pathlib import Path
 from typing import Any, Final
 
 from pydantic import BaseModel, Field, PrivateAttr
@@ -13,6 +15,7 @@ from agenttest.config import AgentTestConfigError, AgentTestError, AgentTestJudg
 from agenttest.core.trace import Trace
 from agenttest.judge.protocol import JUDGE_SYSTEM_PROMPT, current_judge
 from agenttest.judge.providers import DEFAULT_MODELS, PROVIDERS, call_judge
+from agenttest.pricing import trace_cost
 
 __all__ = ["AgentResult", "DEFAULT_JUDGE_MODEL", "_judge_llm", "_clear_judge_cache", "_discard_cached"]
 
@@ -38,6 +41,31 @@ def _cache_key(prompt: str, max_tokens: int) -> str:
     provider = config.get("judge_provider", "anthropic")
     model = config.get("judge_model") or DEFAULT_MODELS.get(provider, "")
     return hashlib.sha256(f"{provider}:{model}:{max_tokens}:{JUDGE_SYSTEM_PROMPT}:{prompt}".encode()).hexdigest()
+
+
+def _disk_path(key: str) -> Path:
+    return Path.cwd() / ".agenttest_cache" / "judge" / f"{key}.txt"
+
+
+def _read_disk_cache(key: str) -> str | None:
+    try:
+        return _disk_path(key).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _write_disk_cache(key: str, reply: str) -> None:
+    path = _disk_path(key)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ignore = path.parents[1] / ".gitignore"
+        if not ignore.exists():
+            ignore.write_text("*\n", encoding="utf-8")
+        temp = path.with_suffix(f".{os.getpid()}.tmp")
+        temp.write_text(reply, encoding="utf-8")
+        temp.replace(path)  # atomic, so parallel test workers never read half a file
+    except OSError:
+        pass  # a read-only checkout just doesn't get a disk cache
 
 
 def _judge_llm(prompt: str, *, max_tokens: int = _DEFAULT_MAX_TOKENS) -> str:
@@ -73,6 +101,13 @@ def _judge_llm(prompt: str, *, max_tokens: int = _DEFAULT_MAX_TOKENS) -> str:
     with _CACHE_LOCK:
         if key in _JUDGE_CACHE:
             return _JUDGE_CACHE[key]
+    use_disk = bool(config.get("judge_cache", False))
+    if use_disk:
+        cached = _read_disk_cache(key)
+        if cached is not None:
+            with _CACHE_LOCK:
+                _JUDGE_CACHE[key] = cached
+            return cached
 
     reply = call_judge(
         provider,
@@ -85,13 +120,17 @@ def _judge_llm(prompt: str, *, max_tokens: int = _DEFAULT_MAX_TOKENS) -> str:
     )
     with _CACHE_LOCK:
         _JUDGE_CACHE[key] = reply
+    if use_disk:
+        _write_disk_cache(key, reply)
     return reply
 
 
 def _discard_cached(prompt: str, *, max_tokens: int = _DEFAULT_MAX_TOKENS) -> None:
     """Forget a cached reply (used when it turned out to be malformed)."""
+    key = _cache_key(prompt, max_tokens)
     with _CACHE_LOCK:
-        _JUDGE_CACHE.pop(_cache_key(prompt, max_tokens), None)
+        _JUDGE_CACHE.pop(key, None)
+    _disk_path(key).unlink(missing_ok=True)
 
 
 def _clear_judge_cache() -> None:
@@ -115,6 +154,8 @@ class AgentResult(BaseModel):
     tokens_used: int
     latency_ms: float
     gracefully_degraded: bool
+    #: Estimated cost in USD; ``None`` when a model's price isn't known.
+    cost_usd: float | None = None
     raw_trace: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     traceback: str | None = None
@@ -150,6 +191,7 @@ class AgentResult(BaseModel):
             tokens_used=trace.tokens_used,
             latency_ms=latency_ms,
             gracefully_degraded=success and bool(output.strip()) and bool(trace.failed_tool_calls),
+            cost_usd=trace_cost(trace),
             raw_trace=trace.model_dump(),
             error=f"{type(exception).__name__}: {exception}" if exception is not None else None,
             traceback=traceback,

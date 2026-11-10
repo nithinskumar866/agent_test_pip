@@ -2,8 +2,8 @@
 
 Every provider is called with the shared judge system prompt, at
 temperature 0 where the provider still accepts sampling parameters (OpenAI,
-Gemini, Ollama). The Anthropic Messages API no longer accepts ``temperature``,
-so for Claude consistency comes from the strict reply formats and the
+Ollama). Current Anthropic and Gemini models reject or ignore ``temperature``,
+so for those, consistency comes from the strict reply formats and the
 deterministic evidence checks instead. :func:`call_judge` adds the
 reliability layer:
 
@@ -33,13 +33,16 @@ __all__ = ["PROVIDERS", "DEFAULT_MODELS", "call_judge", "is_transient"]
 DEFAULT_MODELS: Final[dict[str, str]] = {
     "anthropic": "claude-haiku-5-5",
     "openai": "gpt-4o-mini",
-    "gemini": "gemini-1.5-flash",
+    "gemini": "gemini-3.6-flash",
     "ollama": "llama3",
 }
 
 #: Current Claude models think before answering, and thinking counts against
 #: ``max_tokens``; this floor keeps a short verdict from being cut off.
 _ANTHROPIC_MIN_TOKENS: Final[int] = 4096
+
+#: Gemini thinking also counts against the output limit.
+_GEMINI_MIN_TOKENS: Final[int] = 4096
 
 #: Seconds before the first retry; doubles per attempt, capped at ``_MAX_DELAY``.
 _BASE_DELAY: Final[float] = 0.5
@@ -123,21 +126,27 @@ def _call_openai(prompt: str, system: str, model: str, max_tokens: int, timeout:
     return response.choices[0].message.content or ""
 
 
+def _gemini_client(api_key: str, timeout: float) -> Any:
+    from google import genai
+    from google.genai import types
+
+    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=int(timeout * 1000)))
+
+
 def _call_gemini(prompt: str, system: str, model: str, max_tokens: int, timeout: float) -> str:
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        raise AgentTestConfigError(
-            "google-generativeai not installed. Run: pip install \"pytest-agenttest[gemini]\""
-        ) from None
-    genai.configure(api_key=_require_key("GOOGLE_API_KEY"))
-    gemini_model = genai.GenerativeModel(model, system_instruction=system)
-    response = gemini_model.generate_content(
-        prompt,
-        generation_config={"temperature": 0, "max_output_tokens": max_tokens},
-        request_options={"timeout": timeout},
+    _require_package("google.genai", "gemini")
+    from google.genai import types
+
+    client = _gemini_client(_require_key("GOOGLE_API_KEY"), timeout)
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=max(max_tokens, _GEMINI_MIN_TOKENS),
+        ),
     )
-    return response.text
+    return response.text or ""
 
 
 def _call_ollama(prompt: str, system: str, model: str, max_tokens: int, timeout: float) -> str:

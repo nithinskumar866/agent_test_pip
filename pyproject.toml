@@ -42,13 +42,15 @@ dependencies = [
 # Judge providers
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.0"]
-gemini = ["google-generativeai>=0.5"]
+gemini = ["google-genai>=1.0"]
 ollama = ["httpx>=0.24"]
 # Agent frameworks
 langgraph = ["langgraph>=0.2"]
 crewai = ["crewai>=0.80"]
 openai-agents = ["openai-agents>=0.1"]
-all = ["pytest-agenttest[anthropic,openai,gemini,ollama,langgraph,crewai,openai-agents]"]
+pydantic-ai = ["pydantic-ai-slim>=1.0"]
+llamaindex = ["llama-index-core>=0.12"]
+all = ["pytest-agenttest[anthropic,openai,gemini,ollama,langgraph,crewai,openai-agents,pydantic-ai,llamaindex]"]
 # Development
 dev = [
     "pytest-agenttest[anthropic,openai,ollama]",
@@ -57,6 +59,8 @@ dev = [
     "build>=1.2",
     "twine>=5.0",
     "pip-audit>=2.7",
+    "pytest-xdist>=3.5",
+    "mkdocs-material>=9.5",
 ]
 
 [project.urls]

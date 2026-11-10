@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+### Added
+- **Record and replay**: `@agent_test(cassette=True)` and `agenttest.cassette(...)`, at the HTTP layer, with
+  `--agenttest-record`.
+- **Scripted mocks**: `mock_tool_failure(times=)`, `mock_tool_sequence`, `mock_tool(handler)`, `REAL`.
+- **Tool checks**: `assert_tool_called_with`, `assert_tool_call_count`, `assert_tools_in_order`, `assert_no_tool_errors`.
+- **Cost and budgets**: `result.cost_usd`, `assert_cost_under`, `@agent_test(max_tokens=, max_cost_usd=)`,
+  `--agenttest-max-tokens`, `--agenttest-max-cost`, and `pricing` in the config.
+- **Conversations**: `converse`, `aconverse`, `simulated_user`.
+- **Datasets**: `agenttest.cases`, `load_cases`.
+- **Regression tracking**: `agenttest compare`, `agenttest report --markdown`, and a GitHub Action for pull requests.
+- **Judge accuracy**: `agenttest benchmark`, 100 labelled cases.
+- **Frameworks**: Pydantic AI and LlamaIndex adapters; MCP tool mocking and nested `as_tool` tracing for the OpenAI
+  Agents SDK; `stream=True` for OpenAI and LangGraph.
+- **Secret redaction** in reports, failure traces and cassettes.
+- `pytest-xdist` support, a persistent judge cache (`judge_cache`), nightly CI against the newest frameworks, and a docs site.
+
+### Changed
+- The Gemini judge uses `google-genai` (the old SDK is deprecated) and defaults to `gemini-3.6-flash`.
+- The JSON report gains `cost_usd` and per-run `tool_calls`.
+
 ## 0.2.0 (unreleased): the rework
 
 ### Packaging and release

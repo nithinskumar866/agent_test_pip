@@ -1,8 +1,8 @@
 # Tool mocking
 
 Mocks simulate tool failures, canned responses and slow tools. They match tools **by name** and apply
-to `@agenttest.tool` functions, LangChain/LangGraph tools, OpenAI Agents SDK function tools and CrewAI
-tools.
+to `@agenttest.tool` functions, LangChain/LangGraph tools, OpenAI Agents SDK function and MCP tools,
+CrewAI tools, Pydantic AI tools and LlamaIndex tools.
 
 ```python
 from agenttest import mock_tool_failure, mock_tool_latency, mock_tool_response
@@ -26,9 +26,30 @@ with mock_tool_latency("database_query", delay_ms=500):
     ...
 ```
 
+## Scripted behaviour
+
+Real outages are rarely all-or-nothing. These test retries and recovery:
+
+```python
+from agenttest import REAL, mock_tool, mock_tool_failure, mock_tool_sequence
+
+# Fail once, then work: does the agent retry?
+with mock_tool_failure("web_search", "503", times=1):
+    ...
+
+# Script each call: an exception to raise, a value to return, or REAL for the real tool
+with mock_tool_sequence("web_search", [TimeoutError("slow"), "cached result", REAL]):
+    ...
+
+# Answer based on the arguments
+with mock_tool("get_weather", lambda args: {"Paris": "rain"}.get(args["city"], REAL)):
+    ...
+```
+
+After a sequence runs out, calls reach the real tool unless you set `then=` to something else.
+
 Each context manager yields a `MockHandle`. `handle.calls` counts how many calls it intercepted.
-Mocked calls are recorded on the trace with `metadata["mocked"]` set to `"failure"`, `"response"` or
-`"latency"`.
+Mocked calls are recorded on the trace with `metadata["mocked"]` set to the mock's type.
 
 Nested mocks of the same tool stack: the innermost one applies, and leaving it restores the outer one.
 A call that passes through several layers (for example a CrewAI tool wrapping a decorated function) is
@@ -42,3 +63,5 @@ mocked and recorded once.
 | LangGraph | becomes an error `ToolMessage` or crashes the graph, depending on `ToolNode(handle_tool_errors=...)`. |
 | OpenAI Agents SDK | goes through the tool's failure policy: the default message, your `failure_error_function`, or re-raising. |
 | CrewAI | is retried by CrewAI before the agent sees the error, so `handle.calls` is usually above 1. |
+| Pydantic AI | ends the run, like any exception from a real tool. Use `exception=ModelRetry("try again")` for a recoverable one. |
+| LlamaIndex | is shown to the model as the tool's error, so the agent can recover. |

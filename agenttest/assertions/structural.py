@@ -17,6 +17,8 @@ import json
 import re
 from typing import Any
 
+from agenttest.mocks._registry import tool_args
+
 __all__ = [
     # predicates
     "word_count_between",
@@ -29,6 +31,10 @@ __all__ = [
     "output_matches_regex",
     "output_is_valid_json",
     "gracefully_degraded",
+    "tool_called_with",
+    "tool_call_count",
+    "tools_in_order",
+    "cost_under",
     # assertions
     "assert_word_count_between",
     "assert_steps_at_most",
@@ -44,6 +50,11 @@ __all__ = [
     "assert_output_is_valid_json",
     "assert_valid_json",
     "assert_gracefully_degraded",
+    "assert_tool_called_with",
+    "assert_tool_call_count",
+    "assert_tools_in_order",
+    "assert_no_tool_errors",
+    "assert_cost_under",
 ]
 
 _EXCERPT_CHARS = 300
@@ -216,4 +227,82 @@ def assert_gracefully_degraded(result: Any) -> bool:
     else:
         reason = f"tools {failed} failed but the agent produced no output"
     fail(f"Expected the agent to degrade gracefully, but {reason}.", result)
+    return True
+
+
+# --- tool arguments, order and cost -------------------------------------------
+
+def _tool_steps(target: Any, name: str | None = None) -> list[Any]:
+    trace = getattr(target, "trace", None)
+    if trace is None:
+        raise TypeError("This check needs an AgentResult: it reads the tool calls recorded on the trace.")
+    return [s for s in trace.tool_calls if name is None or s.name == name]
+
+
+def _matches(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
+    return all(key in actual and actual[key] == value for key, value in expected.items())
+
+
+def tool_called_with(result: Any, tool_name: str, /, **arguments: Any) -> bool:
+    return any(_matches(tool_args(s.input), arguments) for s in _tool_steps(result, tool_name))
+
+
+def tool_call_count(result: Any, tool_name: str) -> int:
+    return len(_tool_steps(result, tool_name))
+
+
+def tools_in_order(result: Any, names: list[str]) -> bool:
+    remaining = iter(result.tools_called if hasattr(result, "tools_called") else result)
+    return all(name in remaining for name in names)
+
+
+def cost_under(result: Any, max_usd: float) -> bool:
+    cost = getattr(result, "cost_usd", None)
+    return cost is not None and cost < max_usd
+
+
+def assert_tool_called_with(result: Any, tool_name: str, /, **arguments: Any) -> bool:
+    """Assert some call to the tool had these arguments (other arguments may differ)."""
+    steps = _tool_steps(result, tool_name)
+    if not steps:
+        fail(f"Expected tool {tool_name!r} to be called; tools called: {result.tools_called or 'none'}.", result)
+    if not any(_matches(tool_args(s.input), arguments) for s in steps):
+        seen = [tool_args(s.input) for s in steps]
+        fail(f"Expected a call to {tool_name!r} with {arguments!r}; its calls had: {seen!r}.", result)
+    return True
+
+
+def assert_tool_call_count(result: Any, tool_name: str, count: int) -> bool:
+    """Assert the tool was called exactly ``count`` times."""
+    actual = tool_call_count(result, tool_name)
+    if actual != count:
+        fail(f"Expected {count} call(s) to tool {tool_name!r}, got {actual}.", result)
+    return True
+
+
+def assert_tools_in_order(result: Any, names: list[str]) -> bool:
+    """Assert these tools were called in this order (other calls may come between)."""
+    if not tools_in_order(result, names):
+        tools = list(result.tools_called if hasattr(result, "tools_called") else result)
+        fail(f"Expected tools in the order {names}; actual order: {tools or 'none'}.", result)
+    return True
+
+
+def assert_no_tool_errors(result: Any) -> bool:
+    """Assert every tool call in the run succeeded."""
+    failed = [s for s in _tool_steps(result) if s.failed]
+    if failed:
+        details = "; ".join(f"{s.name}: {s.error}" for s in failed)
+        fail(f"Expected no tool errors; {len(failed)} failed: {details}", result)
+    return True
+
+
+def assert_cost_under(result: Any, max_usd: float) -> bool:
+    """Assert the run's estimated cost is below ``max_usd``."""
+    cost = getattr(result, "cost_usd", None)
+    if cost is None:
+        fail("The run's cost is unknown: a model has no price. Add it under 'pricing' in the config.", result)
+    assert cost is not None  # fail() always raises
+    if cost >= max_usd:
+        fail(f"Expected the run to cost under ${max_usd:g}; it cost ${cost:.6f}.", result)
     return True

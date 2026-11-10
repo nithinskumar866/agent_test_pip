@@ -1,0 +1,32 @@
+site_name: agenttest
+site_description: pytest for AI agents
+repo_url: https://github.com/nithinskumar866/agent_test_pip
+edit_uri: edit/main/docs/
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.sections
+  palette:
+    - scheme: default
+      primary: indigo
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.superfences
+nav:
+  - Home: index.md
+  - Demo: demo.md
+  - Getting started: getting-started.md
+  - Guide:
+      - Running agents: running-agents.md
+      - Frameworks: frameworks.md
+      - Assertions: assertions.md
+      - Tool mocking: mocking.md
+      - Conversations: conversations.md
+      - Record and replay: replay.md
+      - Datasets: datasets.md
+      - The judge: judge.md
+      - Cost and budgets: cost.md
+  - Reports, the CLI and CI: reports-and-ci.md
+  - Releasing: releasing.md

@@ -126,12 +126,18 @@ class _ClassPatcher:
             self._seen.clear()
 
 
+def _call_input(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    """The tool's own arguments, without LangChain's plumbing."""
+    own = {k: v for k, v in kwargs.items() if k not in ("run_manager", "config", "callbacks")}
+    return own or (args[0] if len(args) == 1 else list(args))
+
+
 def _wrap_run(original: Any) -> Any:
     # functools.wraps keeps the signature visible, so BaseTool.run still sees
     # (and passes) ``run_manager`` when the real ``_run`` accepts it.
     @functools.wraps(original)
     def _run(self: Any, *args: Any, **kwargs: Any) -> Any:
-        return apply_mock(self.name, lambda: original(self, *args, **kwargs))
+        return apply_mock(self.name, lambda: original(self, *args, **kwargs), input=_call_input(args, kwargs))
 
     _run._agenttest_mock_wrapper = True  # type: ignore[attr-defined]
     return _run
@@ -140,7 +146,8 @@ def _wrap_run(original: Any) -> Any:
 def _wrap_arun(original: Any) -> Any:
     @functools.wraps(original)
     async def _arun(self: Any, *args: Any, **kwargs: Any) -> Any:
-        return await apply_mock_async(self.name, lambda: original(self, *args, **kwargs))
+        call_input = _call_input(args, kwargs)
+        return await apply_mock_async(self.name, lambda: original(self, *args, **kwargs), input=call_input)
 
     _arun._agenttest_mock_wrapper = True  # type: ignore[attr-defined]
     return _arun

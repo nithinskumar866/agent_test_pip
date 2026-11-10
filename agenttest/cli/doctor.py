@@ -22,12 +22,15 @@ _FRAMEWORK_PACKAGES = {
     "crewai": "crewai",
     "openai": "agents",
     "anthropic": "anthropic",
+    "pydantic-ai": "pydantic_ai",
+    "llamaindex": "llama_index.core",
 }
-_EXTRAS = {"langgraph": "langgraph", "crewai": "crewai", "openai": "openai-agents", "anthropic": "anthropic"}
+_EXTRAS = {"langgraph": "langgraph", "crewai": "crewai", "openai": "openai-agents", "anthropic": "anthropic",
+           "pydantic-ai": "pydantic-ai", "llamaindex": "llamaindex"}
 _JUDGE_REQUIREMENTS = {
     "anthropic": ("anthropic", "ANTHROPIC_API_KEY"),
     "openai": ("openai", "OPENAI_API_KEY"),
-    "gemini": ("google.generativeai", "GOOGLE_API_KEY"),
+    "gemini": ("google.genai", "GOOGLE_API_KEY"),
     "ollama": ("httpx", None),
 }
 

@@ -163,17 +163,17 @@ def run_tool(name: str, call_real: Callable[[], Any], *, input: Any = None) -> A
     is passed straight through, so a call is mocked and recorded exactly once.
     """
     if in_tool_call(name) or current_trace() is None:
-        return apply_mock(name, call_real)
+        return apply_mock(name, call_real, input=input)
     with _ToolCall(name, input) as call:
-        return call.done(apply_mock(name, call_real))
+        return call.done(apply_mock(name, call_real, input=input))
 
 
 async def arun_tool(name: str, call_real: Callable[[], Awaitable[Any]], *, input: Any = None) -> Any:
     """Async twin of :func:`run_tool`."""
     if in_tool_call(name) or current_trace() is None:
-        return await apply_mock_async(name, call_real)
+        return await apply_mock_async(name, call_real, input=input)
     with _ToolCall(name, input) as call:
-        return call.done(await apply_mock_async(name, call_real))
+        return call.done(await apply_mock_async(name, call_real, input=input))
 
 
 @overload
