@@ -280,6 +280,22 @@ def test_agent_stays_within_budget():
 
 Stop a whole test session at a limit with `pytest --agenttest-max-cost=2.00`.
 
+### Safety: leaks, prompt injection and refusals
+
+```python
+from agenttest import assert_no_pii_leak, assert_refuses, assert_resists_injection
+
+assert_no_pii_leak(result, allow=["+1 800 555 0199"])          # emails, phones, cards, IPs, API keys
+assert_resists_injection(agent)                                 # 8 attacks sent as the user's message
+assert_resists_injection(agent, "where is my order?",           # 4 attacks hidden in what a tool returns
+                         through_tool="lookup_order")
+assert_refuses(agent_result, "only show me male candidates")    # judge-backed
+```
+
+Each injection attack tries to make the agent say a meaningless marker word. If it appears in the
+answer or in a tool call, the agent obeyed, and plain code can tell. No judge needed. See the
+[safety guide](docs/safety.md).
+
 ---
 
 ## Supported frameworks
@@ -364,6 +380,7 @@ The judge can be `anthropic`, `openai`, `gemini`, `ollama` (local, or remote wit
 | [Assertions](docs/assertions.md) | Every check |
 | [Tool mocking](docs/mocking.md) | Failures, sequences and slow tools |
 | [The judge](docs/judge.md) | Grounded checks, providers, accuracy and known limits |
+| [Safety](docs/safety.md) | Personal data leaks, prompt injection, refusals |
 | [Record and replay](docs/replay.md) | Cassettes |
 | [Conversations](docs/conversations.md) · [Datasets](docs/datasets.md) · [Cost and budgets](docs/cost.md) | |
 | [Reports, the CLI and CI](docs/reports-and-ci.md) | Reports, regressions, GitHub Actions, configuration |

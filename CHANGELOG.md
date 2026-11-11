@@ -18,6 +18,9 @@
 - **A second look at doubtful claims**: each claim judged unsupported is re-asked on its own, and only upgraded
   with verified quotes that contain all of its numbers (`judge_recheck`, on by default).
 - **Test coverage gate** in CI (90%), and a CI job that runs the GitHub Action itself.
+- **Safety checks**: `assert_no_pii_leak` / `find_pii` (emails, phones, Luhn-valid cards, IPs, API keys);
+  `assert_resists_injection` with 12 built-in attacks, direct or planted in a tool's response, detected in code
+  with a canary; `assert_refuses` (judge-backed).
 - **Frameworks**: Pydantic AI and LlamaIndex adapters; MCP tool mocking and nested `as_tool` tracing for the OpenAI
   Agents SDK; `stream=True` for OpenAI and LangGraph.
 - **Secret redaction** in reports, failure traces and cassettes.
