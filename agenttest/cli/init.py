@@ -250,7 +250,9 @@ def _detect_judge_provider() -> str:
     try:
         import httpx
 
-        httpx.get("http://localhost:11434", timeout=2.0)
+        from agenttest.judge.providers import ollama_url
+
+        httpx.get(ollama_url(), timeout=2.0)
         return "ollama"
     except Exception:  # noqa: S110 - no local Ollama server
         pass

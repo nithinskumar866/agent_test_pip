@@ -323,3 +323,11 @@ def test_decorator_records_next_to_the_test_and_covers_retries(tmp_path):
         inspect.getfile = original
     assert (tmp_path / "suite" / "cassettes" / "test_x" / "test_thing.json").exists()
     assert len(calls) == 2  # both runs of the first pass were recorded; the second pass replayed
+
+
+def test_ollama_on_any_host_is_intercepted():
+    http = pytest.importorskip("httpx2")
+    client = http.Client(transport=http.MockTransport(lambda r: http.Response(200, json={"response": "YES"})))
+    with cassette("c.json") as session:
+        client.post("https://abc-11434.proxy.runpod.net/api/generate", json={"model": "m"})
+    assert session.recorded == 1

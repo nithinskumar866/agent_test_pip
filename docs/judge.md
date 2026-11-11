@@ -12,6 +12,15 @@
 
 Set `judge_model` in `agenttest.config.json` to use another model.
 
+### Ollama on another machine (RunPod, a GPU server)
+
+```json
+{"judge_provider": "ollama", "judge_model": "llama3.1:8b", "judge_base_url": "https://<pod-id>-11434.proxy.runpod.net"}
+```
+
+`OLLAMA_HOST` works too. If the server sits behind an authenticating proxy, set `OLLAMA_API_KEY` and it's
+sent as a bearer token. Ollama judges get a 600-second timeout by default, because CPU inference is slow.
+
 ## Grounded hallucination checks
 
 "Is this hallucinated?" has no reliable answer in the abstract. A grounded check asks a checkable

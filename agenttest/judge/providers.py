@@ -28,7 +28,7 @@ from typing import Any, Final
 
 from agenttest.config import AgentTestConfigError, AgentTestJudgeError
 
-__all__ = ["PROVIDERS", "DEFAULT_MODELS", "DEFAULT_TIMEOUTS", "call_judge", "is_transient"]
+__all__ = ["PROVIDERS", "DEFAULT_MODELS", "DEFAULT_TIMEOUTS", "call_judge", "is_transient", "ollama_url"]
 
 DEFAULT_MODELS: Final[dict[str, str]] = {
     "anthropic": "claude-haiku-5-5",
@@ -153,14 +153,43 @@ def _call_gemini(prompt: str, system: str, model: str, max_tokens: int, timeout:
     return response.text or ""
 
 
+def ollama_url() -> str:
+    """The Ollama server: ``judge_base_url``, then ``OLLAMA_HOST``, then localhost.
+
+    Accepts what Ollama itself accepts in ``OLLAMA_HOST``: a full URL, or a
+    bare ``host`` or ``host:port`` (port 11434 is assumed when none is given).
+    """
+    from agenttest.config import load_config
+
+    try:
+        configured = load_config().judge_base_url
+    except AgentTestConfigError:
+        configured = None
+    value = (configured or os.environ.get("OLLAMA_HOST") or "").strip().rstrip("/")
+    if not value:
+        return "http://localhost:11434"
+    if "://" not in value:
+        host, _, port = value.partition(":")
+        host = "127.0.0.1" if host in ("", "0.0.0.0") else host  # noqa: S104 - a listen address, not a bind
+        value = f"http://{host}:{port or 11434}"
+    return value
+
+
+def _ollama_headers() -> dict[str, str]:
+    """A bearer token for an Ollama behind an authenticating proxy."""
+    key = os.environ.get("OLLAMA_API_KEY")
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
 def _call_ollama(prompt: str, system: str, model: str, max_tokens: int, timeout: float) -> str:
     try:
         import httpx
     except ImportError:
         raise AgentTestConfigError("httpx not installed. Run: pip install \"pytest-agenttest[ollama]\"") from None
+    base = ollama_url()
     try:
         response = httpx.post(
-            "http://localhost:11434/api/generate",
+            f"{base}/api/generate",
             json={
                 "model": model,
                 "prompt": prompt,
@@ -168,23 +197,31 @@ def _call_ollama(prompt: str, system: str, model: str, max_tokens: int, timeout:
                 "stream": False,
                 "options": {"temperature": 0, "num_predict": max_tokens},
             },
+            headers=_ollama_headers(),
             timeout=timeout,
         )
     except httpx.ConnectError:
         raise AgentTestConfigError(
-            "Cannot connect to Ollama at localhost:11434. Make sure Ollama is running: ollama serve"
+            f"Cannot connect to Ollama at {base}. Make sure it is running (ollama serve), or set "
+            '"judge_base_url" in agenttest.config.json (or OLLAMA_HOST) to your server.'
         ) from None
+    if response.status_code in (401, 403):
+        raise AgentTestConfigError(
+            f"Ollama at {base} refused the request ({response.status_code}). "
+            "If it sits behind an authenticating proxy, set OLLAMA_API_KEY."
+        )
     if response.status_code == 404:
-        raise AgentTestConfigError(_missing_ollama_model(httpx, model))
+        raise AgentTestConfigError(_missing_ollama_model(httpx, model, base))
     response.raise_for_status()
     return response.json()["response"]
 
 
-def _missing_ollama_model(httpx: Any, model: str) -> str:
-    """Explain a missing model, listing the ones that are installed."""
-    message = f"Ollama has no model {model!r}."
+def _missing_ollama_model(httpx: Any, model: str, base: str) -> str:
+    """Explain a missing model (or wrong address), listing the models that are installed."""
+    message = f"Ollama at {base} has no model {model!r}."
     try:
-        installed = [m["name"] for m in httpx.get("http://localhost:11434/api/tags", timeout=5).json()["models"]]
+        reply = httpx.get(f"{base}/api/tags", headers=_ollama_headers(), timeout=5)
+        installed = [m["name"] for m in reply.json()["models"]]
     except Exception:  # the hint is a bonus; never hide the real problem behind it
         installed = []
     if installed:

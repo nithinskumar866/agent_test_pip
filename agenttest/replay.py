@@ -193,6 +193,8 @@ class Cassette:
     # --- matching -------------------------------------------------------------
 
     def intercepts(self, request: Any) -> bool:
+        if request.url.path.startswith("/api/generate"):  # an Ollama judge, wherever it runs
+            return True
         netloc = request.url.host + (f":{request.url.port}" if request.url.port else "")
         return any(netloc == h or request.url.host == h or request.url.host.endswith(f".{h}") for h in self.hosts) or (
             request.url.host.endswith(".openai.azure.com")

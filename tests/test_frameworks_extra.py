@@ -572,12 +572,17 @@ def test_gemini_missing_sdk_hint(monkeypatch):
         sem.contains_fact("x", "y")
 
 
+urls: list = []
+
+
 def _ollama(monkeypatch, responses):
     httpx = pytest.importorskip("httpx")
     sent = []
+    urls.clear()
 
-    def post(url, json, timeout):
+    def post(url, json, timeout, headers=None):
         sent.append(json)
+        urls.append((url, headers))
         item = responses.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -612,9 +617,9 @@ def test_ollama_not_running_is_a_config_error(monkeypatch):
 def test_ollama_missing_model_lists_the_installed_ones(monkeypatch):
     httpx = pytest.importorskip("httpx")
     sent = _ollama(monkeypatch, [(404, {"error": "model 'llama3' not found"})])
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: httpx.Response(
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, headers=None: httpx.Response(
         200, json={"models": [{"name": "llama3:8b"}, {"name": "llama3.1:8b"}]}, request=httpx.Request("GET", url)))
-    with pytest.raises(agenttest.AgentTestConfigError, match=r"no model 'llama3'\. Installed: llama3:8b, llama3\.1:8b"):
+    with pytest.raises(agenttest.AgentTestConfigError, match=r"has no model 'llama3'\. Installed: llama3:8b, llama3\.1:8b"):
         sem.contains_fact("text", "claim")
     assert len(sent) == 1  # not retried
 
@@ -623,7 +628,7 @@ def test_ollama_missing_model_message_survives_a_failed_listing(monkeypatch):
     httpx = pytest.importorskip("httpx")
     _ollama(monkeypatch, [(404, {"error": "not found"})])
 
-    def broken(url, timeout):
+    def broken(url, timeout, headers=None):
         raise httpx.ConnectError("gone")
 
     monkeypatch.setattr(httpx, "get", broken)
@@ -655,3 +660,46 @@ def test_grounding_prompt_puts_the_output_first_and_forbids_context_claims():
     prompt = judge_prompts[0]
     assert prompt.index("<<<OUTPUT-") < prompt.index("<<<PASSAGE1-")
     assert "never list something as a claim because the context says it" in prompt
+
+
+@pytest.mark.parametrize(
+    ("config", "env", "expected"),
+    [
+        ({}, None, "http://localhost:11434"),
+        ({}, "gpu-box", "http://gpu-box:11434"),
+        ({}, "0.0.0.0:9000", "http://127.0.0.1:9000"),
+        ({}, "https://abc-11434.proxy.runpod.net/", "https://abc-11434.proxy.runpod.net"),
+        ({"judge_base_url": "https://pod.example.com"}, "ignored-host", "https://pod.example.com"),
+    ],
+)
+def test_ollama_server_address(monkeypatch, config, env, expected):
+    if env is None:
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    else:
+        monkeypatch.setenv("OLLAMA_HOST", env)
+    _config(judge_provider="ollama", **config)
+    assert providers.ollama_url() == expected
+
+
+def test_remote_ollama_gets_the_url_and_bearer_token(monkeypatch):
+    _ollama(monkeypatch, [(200, {"response": "YES"})])
+    _config(judge_provider="ollama", judge_base_url="https://abc-11434.proxy.runpod.net")
+    monkeypatch.setenv("OLLAMA_API_KEY", "pod-secret")
+    assert sem.contains_fact("text", "claim") is True
+    url, headers = urls[0]
+    assert url == "https://abc-11434.proxy.runpod.net/api/generate"
+    assert headers == {"Authorization": "Bearer pod-secret"}
+
+
+def test_remote_ollama_rejection_is_a_config_error(monkeypatch):
+    _ollama(monkeypatch, [(401, {"error": "unauthorized"})])
+    with pytest.raises(agenttest.AgentTestConfigError, match="OLLAMA_API_KEY"):
+        sem.contains_fact("text", "claim")
+
+
+def test_unreachable_server_message_names_the_address(monkeypatch):
+    httpx = pytest.importorskip("httpx")
+    _ollama(monkeypatch, [httpx.ConnectError("refused")])
+    _config(judge_provider="ollama", judge_base_url="https://down.example.com")
+    with pytest.raises(agenttest.AgentTestConfigError, match="https://down.example.com.*judge_base_url"):
+        sem.contains_fact("text", "claim")
