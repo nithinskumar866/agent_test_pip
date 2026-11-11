@@ -703,3 +703,30 @@ def test_unreachable_server_message_names_the_address(monkeypatch):
     _config(judge_provider="ollama", judge_base_url="https://down.example.com")
     with pytest.raises(agenttest.AgentTestConfigError, match="https://down.example.com.*judge_base_url"):
         sem.contains_fact("text", "claim")
+
+
+def test_openai_steps_are_recorded_in_the_order_they_happened():
+    pytest.importorskip("agents")
+    result = run(_agent(), "q")
+    assert [(s.kind, s.name) for s in result.trace.steps] == [
+        ("llm", "model_response"), ("tool", "get_weather"), ("llm", "model_response"),
+    ]
+    assert result.trace.llm_calls[0].tool_requests == ["get_weather"]
+    assert result.trace.llm_calls[1].tool_requests == []
+
+
+def test_openai_step_order_with_two_tool_rounds():
+    pytest.importorskip("agents")
+    from agents import Agent
+
+    def decide(items):
+        done = _outputs(items)
+        if "c2" in done:
+            return [_message("done")]
+        if "c1" in done:
+            return [_call("get_weather", "c2", {"city": "Rome"})]
+        return [_call("get_weather", "c1", {"city": "Paris"})]
+
+    result = run(Agent(name="w", instructions="-", tools=[_weather()], model=_model(decide)), "q")
+    assert [s.kind for s in result.trace.steps] == ["llm", "tool", "llm", "tool", "llm"]
+    assert [s.output for s in result.trace.tool_calls] == ["sunny in Paris", "sunny in Rome"]

@@ -54,22 +54,52 @@ def _item_type(item: Any) -> str | None:
     return getattr(item, "type", None)
 
 
-def _record_run(result: Any, failures: dict[str, list[tuple[str, str]]], model: str | None = None) -> None:
-    for response in getattr(result, "raw_responses", None) or []:
+class _ModelSteps:
+    """Records model responses in run order: each one just before the tool calls it asked for."""
+
+    def __init__(self, responses: list[Any], model: str | None) -> None:
+        self.responses = responses
+        self.model = model
+        self.recorded = 0
+
+    def _record(self, response: Any) -> None:
         usage = getattr(response, "usage", None)
+        outputs = getattr(response, "output", None) or []
         record_step(
             "llm",
             "model_response",
-            model=model,
+            model=self.model,
             input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
             output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            tool_requests=[o.name for o in outputs if getattr(o, "type", None) == "function_call"],
             metadata={"response_id": getattr(response, "response_id", None)},
         )
 
+    def through(self, call_id: str | None) -> None:
+        """Record every response up to the one that made the call ``call_id``."""
+        if not call_id:
+            return
+        for index in range(self.recorded, len(self.responses)):
+            outputs = getattr(self.responses[index], "output", None) or []
+            if any(getattr(o, "call_id", None) == call_id for o in outputs):
+                for response in self.responses[self.recorded : index + 1]:
+                    self._record(response)
+                self.recorded = index + 1
+                return
+
+    def rest(self) -> None:
+        for response in self.responses[self.recorded :]:
+            self._record(response)
+        self.recorded = len(self.responses)
+
+
+def _record_run(result: Any, failures: dict[str, list[tuple[str, str]]], model: str | None = None) -> None:
+    steps = _ModelSteps(list(getattr(result, "raw_responses", None) or []), model)
     pending: dict[str, Any] = {}
     try:
-        _record_items(result, failures, pending)
+        _record_items(result, failures, pending, steps)
     finally:
+        steps.rest()
         _record_leftover_failures(failures)
 
 
@@ -85,9 +115,13 @@ def _record_leftover_failures(failures: dict[str, list[tuple[str, str]]]) -> Non
     failures.clear()
 
 
-def _record_items(result: Any, failures: dict[str, list[tuple[str, str]]], pending: dict[str, Any]) -> None:
+def _record_items(
+    result: Any, failures: dict[str, list[tuple[str, str]]], pending: dict[str, Any], steps: _ModelSteps
+) -> None:
     for item in getattr(result, "new_items", None) or []:
         raw = getattr(item, "raw_item", None)
+        if _item_type(item) != "tool_call_output_item":
+            steps.through(getattr(raw, "call_id", None))
         if _item_type(item) == "tool_call_item":
             name = getattr(raw, "name", None) or "unknown"
             call_id = getattr(raw, "call_id", None) or getattr(raw, "id", None)
