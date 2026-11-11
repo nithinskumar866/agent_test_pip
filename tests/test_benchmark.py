@@ -115,3 +115,24 @@ def test_benchmark_command_with_the_judge_disabled():
     Path("agenttest.config.json").write_text('{"judge_provider": "none"}')
     result = CliRunner().invoke(main, ["benchmark", "--limit", "1"])
     assert result.exit_code != 0 and "disabled" in result.output
+
+
+def test_benchmark_stops_at_the_first_rejected_key(monkeypatch, tmp_path):
+    anthropic = pytest.importorskip("anthropic")
+    http = pytest.importorskip("httpx2")
+    from agenttest.judge import providers
+
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return http.Response(401, json={"type": "error", "error": {"type": "authentication_error", "message": "bad"}})
+
+    (tmp_path / "agenttest.config.json").write_text('{"judge_provider": "anthropic"}')
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setattr(providers, "_anthropic_client", lambda api_key, timeout: anthropic.Anthropic(
+        api_key=api_key, max_retries=0, http_client=http.Client(transport=http.MockTransport(handler))))
+
+    result = CliRunner().invoke(main, ["benchmark", "--limit", "4"])
+    assert result.exit_code != 0 and "Stopped the benchmark" in result.output
+    assert len(calls) == 1

@@ -133,7 +133,7 @@ and use `use_judge` in tests that only exercise your own logic.
 | `judge_provider` | `"anthropic"` | See [the judge](judge.md). |
 | `judge_model` | provider default | |
 | `judge_max_retries` | `2` | Retries for transient judge API failures. |
-| `judge_timeout` | `60` | Seconds per judge API call. |
+| `judge_timeout` | `60` (`600` for Ollama) | Seconds per judge call. |
 | `judge_cache` | `false` | Keep judge replies on disk between sessions. |
 | `pricing` | `{}` | Extra model prices. See [cost](cost.md). |
 | `redact_patterns` | `[]` | Extra patterns to hide. See [cost](cost.md#hiding-secrets). |

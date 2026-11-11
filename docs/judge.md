@@ -67,7 +67,7 @@ Configure in `agenttest.config.json`:
 | `judge_provider` | `"anthropic"` | `anthropic`, `openai`, `gemini`, `ollama` or `none`. |
 | `judge_model` | provider default | Model id. |
 | `judge_max_retries` | `2` | Retries for transient API failures. |
-| `judge_timeout` | `60` | Seconds per judge API call. |
+| `judge_timeout` | `60` (`600` for Ollama) | Seconds per judge call. |
 
 ## How accurate is your judge?
 

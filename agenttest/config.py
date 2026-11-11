@@ -93,8 +93,8 @@ class AgentTestConfig(BaseModel):
     min_pass_rate: float = Field(default=1.0, gt=0.0, le=1.0)
     #: Retries for transient judge API failures (timeouts, 429, 5xx).
     judge_max_retries: int = Field(default=2, ge=0)
-    #: Seconds before one judge API call is abandoned.
-    judge_timeout: float = Field(default=60.0, gt=0.0)
+    #: Seconds before one judge call is abandoned (default: 60, or 600 for a local Ollama model).
+    judge_timeout: float | None = Field(default=None, gt=0.0)
     #: Keep judge replies on disk between sessions (in ``.agenttest_cache/``).
     judge_cache: bool = False
     #: Extra model prices, USD per million tokens: ``{"my-model": {"input": 1, "output": 3}}``.

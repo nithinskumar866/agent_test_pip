@@ -609,7 +609,49 @@ def test_ollama_not_running_is_a_config_error(monkeypatch):
         sem.contains_fact("text", "claim")
 
 
-def test_ollama_missing_model_is_a_judge_error(monkeypatch):
-    _ollama(monkeypatch, [(404, {"error": "model not found"})])
-    with pytest.raises(agenttest.AgentTestJudgeError):
+def test_ollama_missing_model_lists_the_installed_ones(monkeypatch):
+    httpx = pytest.importorskip("httpx")
+    sent = _ollama(monkeypatch, [(404, {"error": "model 'llama3' not found"})])
+    monkeypatch.setattr(httpx, "get", lambda url, timeout: httpx.Response(
+        200, json={"models": [{"name": "llama3:8b"}, {"name": "llama3.1:8b"}]}, request=httpx.Request("GET", url)))
+    with pytest.raises(agenttest.AgentTestConfigError, match=r"no model 'llama3'\. Installed: llama3:8b, llama3\.1:8b"):
         sem.contains_fact("text", "claim")
+    assert len(sent) == 1  # not retried
+
+
+def test_ollama_missing_model_message_survives_a_failed_listing(monkeypatch):
+    httpx = pytest.importorskip("httpx")
+    _ollama(monkeypatch, [(404, {"error": "not found"})])
+
+    def broken(url, timeout):
+        raise httpx.ConnectError("gone")
+
+    monkeypatch.setattr(httpx, "get", broken)
+    with pytest.raises(agenttest.AgentTestConfigError, match="ollama pull llama3$"):
+        sem.contains_fact("text", "claim")
+
+
+def test_ollama_gets_a_long_default_timeout_and_config_overrides_it(monkeypatch):
+    seen = []
+    monkeypatch.setattr("agenttest.core.result.call_judge", lambda *a, **k: seen.append(k["timeout"]) or "YES")
+    _config(judge_provider="ollama")
+    sem.contains_fact("a", "b")
+    _config(judge_provider="ollama", judge_timeout=30)
+    sem.contains_fact("c", "d")
+    _config(judge_provider="anthropic")
+    sem.contains_fact("e", "f")
+    assert seen == [600.0, 30.0, 60.0]
+
+
+def test_grounding_prompt_puts_the_output_first_and_forbids_context_claims():
+    judge_prompts = []
+
+    def judge(prompt, system):
+        judge_prompts.append(prompt)
+        return '{"claims": []}'
+
+    with use_judge(judge):
+        agenttest.check_grounding("The answer.", ["Some context."])
+    prompt = judge_prompts[0]
+    assert prompt.index("<<<OUTPUT-") < prompt.index("<<<PASSAGE1-")
+    assert "never list something as a claim because the context says it" in prompt

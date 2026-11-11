@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 from agenttest.config import AgentTestConfigError, AgentTestError, AgentTestJudgeError, _load_config
 from agenttest.core.trace import Trace
 from agenttest.judge.protocol import JUDGE_SYSTEM_PROMPT, current_judge
-from agenttest.judge.providers import DEFAULT_MODELS, PROVIDERS, call_judge
+from agenttest.judge.providers import DEFAULT_MODELS, DEFAULT_TIMEOUTS, PROVIDERS, call_judge
 from agenttest.pricing import trace_cost
 
 __all__ = ["AgentResult", "DEFAULT_JUDGE_MODEL", "_judge_llm", "_clear_judge_cache", "_discard_cached"]
@@ -116,7 +116,7 @@ def _judge_llm(prompt: str, *, max_tokens: int = _DEFAULT_MAX_TOKENS) -> str:
         system=JUDGE_SYSTEM_PROMPT,
         max_tokens=max_tokens,
         max_retries=int(config.get("judge_max_retries", 2)),
-        timeout=float(config.get("judge_timeout", 60.0)),
+        timeout=float(config.get("judge_timeout") or DEFAULT_TIMEOUTS.get(provider, 60.0)),
     )
     with _CACHE_LOCK:
         _JUDGE_CACHE[key] = reply

@@ -82,6 +82,13 @@ def build_cases() -> list[BenchmarkCase]:
     return cases
 
 
+def _repeats(exc: BaseException) -> bool:
+    """Whether every later call would fail the same way (a rejected key, say)."""
+    cause = exc.__cause__
+    status = getattr(cause, "status_code", None) or getattr(getattr(cause, "response", None), "status_code", None)
+    return status in (401, 403)
+
+
 def run_benchmark(
     limit: int | None = None,
     on_progress: Callable[[int, int], None] | None = None,
@@ -110,6 +117,8 @@ def run_benchmark(
         except AgentTestConfigError:
             raise
         except AgentTestJudgeError as exc:
+            if _repeats(exc):
+                raise AgentTestConfigError(f"Stopped the benchmark: {exc}") from exc
             errors.append({"id": case.id, "error": str(exc)})
         else:
             per_kind[case.kind]["total"] += 1

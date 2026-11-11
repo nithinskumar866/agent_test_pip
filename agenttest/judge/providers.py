@@ -28,7 +28,7 @@ from typing import Any, Final
 
 from agenttest.config import AgentTestConfigError, AgentTestJudgeError
 
-__all__ = ["PROVIDERS", "DEFAULT_MODELS", "call_judge", "is_transient"]
+__all__ = ["PROVIDERS", "DEFAULT_MODELS", "DEFAULT_TIMEOUTS", "call_judge", "is_transient"]
 
 DEFAULT_MODELS: Final[dict[str, str]] = {
     "anthropic": "claude-haiku-5-5",
@@ -43,6 +43,10 @@ _ANTHROPIC_MIN_TOKENS: Final[int] = 4096
 
 #: Gemini thinking also counts against the output limit.
 _GEMINI_MIN_TOKENS: Final[int] = 4096
+
+#: Seconds per call when ``judge_timeout`` isn't set. A local model on a CPU can
+#: take minutes to write a grounding report; hosted APIs answer in seconds.
+DEFAULT_TIMEOUTS: Final[dict[str, float]] = {"ollama": 600.0}
 
 #: Seconds before the first retry; doubles per attempt, capped at ``_MAX_DELAY``.
 _BASE_DELAY: Final[float] = 0.5
@@ -170,8 +174,22 @@ def _call_ollama(prompt: str, system: str, model: str, max_tokens: int, timeout:
         raise AgentTestConfigError(
             "Cannot connect to Ollama at localhost:11434. Make sure Ollama is running: ollama serve"
         ) from None
+    if response.status_code == 404:
+        raise AgentTestConfigError(_missing_ollama_model(httpx, model))
     response.raise_for_status()
     return response.json()["response"]
+
+
+def _missing_ollama_model(httpx: Any, model: str) -> str:
+    """Explain a missing model, listing the ones that are installed."""
+    message = f"Ollama has no model {model!r}."
+    try:
+        installed = [m["name"] for m in httpx.get("http://localhost:11434/api/tags", timeout=5).json()["models"]]
+    except Exception:  # the hint is a bonus; never hide the real problem behind it
+        installed = []
+    if installed:
+        message += f" Installed: {', '.join(installed)}."
+    return message + f' Set "judge_model" in agenttest.config.json to one of them, or run: ollama pull {model}'
 
 
 PROVIDERS: Final[dict[str, Callable[[str, str, str, int, float], str]]] = {

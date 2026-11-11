@@ -6,6 +6,8 @@ are the cases the scripted tests cannot prove: that a real judge labels
 claims correctly and is not talked into a verdict by an injected output.
 
     AGENTTEST_LIVE_JUDGE=anthropic ANTHROPIC_API_KEY=... pytest tests/test_judge_live.py
+
+Set ``AGENTTEST_LIVE_MODEL`` to use a model other than the provider's default.
 """
 
 import json
@@ -34,7 +36,10 @@ CONTEXT = [
 @pytest.fixture(autouse=True)
 def live_config(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "agenttest.config.json").write_text(json.dumps({"judge_provider": PROVIDER}))
+    config = {"judge_provider": PROVIDER}
+    if os.getenv("AGENTTEST_LIVE_MODEL"):
+        config["judge_model"] = os.environ["AGENTTEST_LIVE_MODEL"]
+    (tmp_path / "agenttest.config.json").write_text(json.dumps(config))
     _clear_judge_cache()
 
 
