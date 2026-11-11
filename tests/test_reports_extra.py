@@ -80,6 +80,46 @@ def test_xdist_runs_reach_the_controller(pytester):
     assert (pytester.path / "r.html").exists()
 
 
+XFAIL_SUITE = """
+import pytest
+import agenttest
+from agenttest import agent_test
+
+
+@pytest.mark.xfail(strict=True, reason="FINDING: the agent crashes on empty input")
+@agent_test
+def test_known_problem():
+    assert agenttest.run(lambda: "").output == "answer"
+
+
+@pytest.mark.xfail(reason="sometimes fails")
+@agent_test
+def test_fixed_problem():
+    assert agenttest.run(lambda: "answer").output == "answer"
+
+
+@pytest.mark.skip(reason="not today")
+@agent_test
+def test_skipped():
+    pass
+"""
+
+
+def test_expected_failures_are_not_reported_as_skipped(pytester):
+    """pytest reports a failed xfail test as "skipped"; a recorded finding must not read as "not run"."""
+    result = session(pytester, XFAIL_SUITE, "--agenttest-report=r.json", "--agenttest-html=r.html")
+
+    result.stdout.fnmatch_lines(["Agent tests: 0 passed, 0 failed, 1 skipped, 1 xfailed, 1 xpassed"])
+    report = json.loads((pytester.path / "r.json").read_text(encoding="utf-8"))
+    assert {k: report["summary"][k] for k in ("skipped", "xfailed", "xpassed")} == {
+        "skipped": 1, "xfailed": 1, "xpassed": 1}
+    outcomes = {t["nodeid"].split("::")[1]: (t["outcome"], t["message"]) for t in report["tests"]}
+    assert outcomes["test_known_problem"] == ("xfailed", "FINDING: the agent crashes on empty input")
+    assert outcomes["test_fixed_problem"][0] == "xpassed"
+    html = (pytester.path / "r.html").read_text(encoding="utf-8")
+    assert '<td class="xfailed">xfailed</td>' in html and "expected failures" in html
+
+
 def test_xdist_failing_test_still_shows_the_trace(pytester):
     pytest.importorskip("xdist")
     result = session(pytester, SUITE, "-n", "2")

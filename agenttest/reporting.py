@@ -214,7 +214,7 @@ def build_report(tests: list[TestRecord], flaky: list[Any], *, duration_s: float
         "duration_s": round(duration_s, 3),
         "summary": {
             "tests": len(tests),
-            **{k: outcomes.get(k, 0) for k in ("passed", "failed", "skipped")},
+            **{k: outcomes.get(k, 0) for k in ("passed", "failed", "skipped", "xfailed", "xpassed")},
             "agent_runs": len(runs),
             "failed_runs": sum(not r["success"] for r in runs),
             "tokens_used": sum(r["tokens_used"] for r in runs),
@@ -341,7 +341,7 @@ h1{font-size:1.5rem;margin:0 0 .25rem} .muted{color:#656d76}
 .tile b{display:block;font-size:1.3rem}
 table{border-collapse:collapse;width:100%}
 th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #d0d7de;vertical-align:top}
-.passed{color:#1a7f37} .failed{color:#cf222e} .skipped{color:#9a6700}
+.passed{color:#1a7f37} .failed{color:#cf222e} .skipped{color:#9a6700} .xfailed{color:#8250df} .xpassed{color:#0969da}
 details{margin:.25rem 0} summary{cursor:pointer}
 pre{background:#f6f8fa;padding:.6rem;border-radius:6px;overflow:auto;white-space:pre-wrap;margin:.4rem 0}
 """
@@ -360,6 +360,9 @@ def render_html(report: dict[str, Any]) -> str:
             ("tests", s["tests"]), ("passed", s["passed"]), ("failed", s["failed"]), ("skipped", s["skipped"]),
             ("agent runs", s["agent_runs"]), ("tokens", s["tokens_used"]), ("cost", _cost_text(s.get("cost_usd"))),
             ("failed tool calls", s["failed_tool_calls"]), ("flaky", s["flaky"]),
+            # Reports written before 0.3.0 have no xfail counts.
+            *[(label, s[key]) for key, label in (("xfailed", "expected failures"), ("xpassed", "unexpected passes"))
+              if s.get(key)],
         ]
     )
     rows = []
