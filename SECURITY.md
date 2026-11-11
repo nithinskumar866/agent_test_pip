@@ -20,13 +20,16 @@ Security fixes go into the latest release.
   (or the run's tool outputs). Don't put data in tests that your judge provider must not see. Use
   `judge_provider: "ollama"` to keep judging local, or `"none"` to disable it.
 - **Reports** (`--agenttest-report`, `--agenttest-html`) contain agent outputs, tool inputs and tool
-  outputs, shortened. Treat them like test logs: if your tools handle secrets or personal data, check
-  the reports before publishing them as CI artifacts. The HTML report escapes all content, so agent
+  outputs, shortened, with anything that looks like a credential hidden (see docs/cost.md). Treat them like
+  test logs: if your tools handle personal data, check the reports before publishing them as CI artifacts. The HTML report escapes all content, so agent
   output can't inject script into the page.
 - **Untrusted agent output** given to the judge is enclosed as data under a system prompt that forbids
   following instructions inside it, and grounded verdicts must be backed by quotes verified in code.
   This reduces, but can't eliminate, the risk of prompt injection steering a judge. See
   [docs/judge.md](docs/judge.md).
+- **Cassettes** store the prompts and model replies of recorded tests, and are meant to be committed. Request
+  headers are never stored, and bodies pass through the same redaction. Read one before committing it if your
+  prompts contain personal data.
 - **Configuration** is read from `agenttest.config.json` as plain JSON. No code is executed from it.
 
 ## Supply chain

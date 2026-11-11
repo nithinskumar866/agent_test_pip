@@ -29,7 +29,7 @@ def main() -> None:
 @click.option(
     "--framework",
     default=None,
-    help="Force framework: langgraph/crewai/openai/anthropic/generic",
+    help="Force framework: langgraph/crewai/openai/anthropic/pydantic-ai/llamaindex/generic",
 )
 @click.option(
     "--judge",
@@ -70,7 +70,7 @@ def init(framework: str | None, judge: str | None, force: bool, example: bool) -
     judge_model_defaults = {
         "anthropic": "claude-haiku-5-5",
         "openai": "gpt-4o-mini",
-        "gemini": "gemini-1.5-flash",
+        "gemini": "gemini-3.6-flash",
         "ollama": "llama3",
         "none": "none",
     }
@@ -82,6 +82,7 @@ def init(framework: str | None, judge: str | None, force: bool, example: bool) -
         "judge_model": judge_model,
         "timeout": 60,
         "max_retries": 0,
+        "judge_cache": True,
     }
 
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
@@ -211,6 +212,10 @@ def _detect_framework() -> str:
         return "langgraph"
     elif "crewai" in all_deps:
         return "crewai"
+    elif "pydantic-ai" in all_deps or "pydantic_ai" in all_deps:
+        return "pydantic-ai"
+    elif "llama-index" in all_deps or "llama_index" in all_deps:
+        return "llamaindex"
     elif "openai-agents" in all_deps or "openai_agents" in all_deps or "openai" in all_deps:
         return "openai"
     elif "anthropic" in all_deps:
@@ -230,7 +235,7 @@ def _detect_judge_provider() -> str:
     checks = [
         ("anthropic", "anthropic", "ANTHROPIC_API_KEY"),
         ("openai", "openai", "OPENAI_API_KEY"),
-        ("gemini", "google.generativeai", "GOOGLE_API_KEY"),
+        ("gemini", "google.genai", "GOOGLE_API_KEY"),
     ]
 
     for provider, package, env_var in checks:
@@ -245,7 +250,9 @@ def _detect_judge_provider() -> str:
     try:
         import httpx
 
-        httpx.get("http://localhost:11434", timeout=2.0)
+        from agenttest.judge.providers import ollama_url
+
+        httpx.get(ollama_url(), timeout=2.0)
         return "ollama"
     except Exception:  # noqa: S110 - no local Ollama server
         pass
@@ -254,11 +261,14 @@ def _detect_judge_provider() -> str:
 
 
 def _register() -> None:
+    from agenttest.cli.benchmark import benchmark
     from agenttest.cli.doctor import doctor
-    from agenttest.cli.report import report
+    from agenttest.cli.report import compare, report
 
     main.add_command(doctor)
     main.add_command(report)
+    main.add_command(compare)
+    main.add_command(benchmark)
 
 
 _register()

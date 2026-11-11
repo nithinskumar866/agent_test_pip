@@ -24,12 +24,17 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from agenttest.config import AgentTestConfigError, AgentTestFlakyWarning, AgentTestPassRateError
+from agenttest.config import (
+    AgentTestBudgetError,
+    AgentTestConfigError,
+    AgentTestFlakyWarning,
+    AgentTestPassRateError,
+)
 
 __all__ = ["RetryPolicy", "TrialOutcome", "PassRateReport", "execute", "aexecute", "FLAKY_REPORTS"]
 
 #: Exceptions that indicate misuse, not flakiness: never retried.
-_NON_RETRYABLE: tuple[type[BaseException], ...] = (AgentTestConfigError,)
+_NON_RETRYABLE: tuple[type[BaseException], ...] = (AgentTestConfigError, AgentTestBudgetError)
 
 
 @dataclass(frozen=True)

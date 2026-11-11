@@ -108,7 +108,8 @@ def test_contradicted_claim_always_fails():
     judge = Script(report(claim("The tower is 500 metres tall", "contradicted", (1, "330 metres tall"))))
     with use_judge(judge):
         with pytest.raises(AssertionError, match=r"1 claim\(s\) contradicted by the context"):
-            assert_grounded("The tower is 500 metres tall.", CONTEXT, max_unsupported=1.0)
+            # check_numbers=False: this test is about the judge; the number check alone would catch 500.
+            assert_grounded("The tower is 500 metres tall.", CONTEXT, max_unsupported=1.0, check_numbers=False)
         assert sem.hallucination_score("The tower is 500 metres tall.", context=CONTEXT) == 1.0
 
 
@@ -225,6 +226,51 @@ def test_single_string_context_and_invalid_threshold():
         assert check_grounding("x", "one passage").passages == ["one passage"]
     with pytest.raises(ValueError):
         assert_grounded("x", "ctx", max_unsupported=1.5)
+
+
+ORDER = ["Order 1234 shipped on 3 March and will arrive on 6 March."]
+SHIPPED = claim("your order 1234 was shipped on 3 March", "supported", (1, "Order 1234 shipped on 3 March"))
+ARRIVES = claim("your order 1234 is expected to arrive on 6 March", "supported", (1, "will arrive on 6 March"))
+
+
+def test_claim_that_only_combines_supported_claims_is_not_a_hallucination():
+    # Seen live with llama3.1:8b: both facts supported, then their combination called unsupported.
+    combined = claim("your order 1234 was shipped on 3 March and is expected to arrive on 6 March.", "unsupported",
+                     reason="the claim is a combination of two separate statements")
+    with use_judge(Script(report(SHIPPED, ARRIVES, combined))):
+        result = assert_grounded("Your order 1234 shipped on 3 March and arrives on 6 March.", ORDER)
+
+    merged = result.claims[2]
+    assert merged.status == "supported" and not merged.downgraded
+    assert {ev.quote for ev in merged.evidence} == {"Order 1234 shipped on 3 March", "will arrive on 6 March"}
+    assert "only combines claims already supported" in result.describe()
+
+
+@pytest.mark.parametrize("text", [
+    "your order 1234 was shipped on 6 March and is expected to arrive on 6 March",  # a changed fact
+    "your order 1234 was shipped on 3 March and comes with a 20% discount",        # a new fact
+    "your order 1234 was shipped on 3 March",                                       # nothing to combine
+    "a refund was shipped on 3 March and is expected to arrive on 6 March",         # different subject
+])
+def test_combined_claim_with_anything_new_stays_unsupported(text):
+    with use_judge(Script(report(SHIPPED, ARRIVES, claim(text, "unsupported")))):
+        result = check_grounding("output", ORDER)
+    assert result.claims[2].status == "unsupported"
+
+
+def test_combined_claim_needs_verified_parts():
+    fake = claim("your order 1234 is expected to arrive on 6 March", "supported", (1, "arrives tomorrow"))
+    combined = claim("your order 1234 was shipped on 3 March and is expected to arrive on 6 March", "unsupported")
+    with use_judge(Script(report(SHIPPED, fake, combined))):
+        result = check_grounding("output", ORDER)
+    assert [c.status for c in result.claims] == ["supported", "unsupported", "unsupported"]
+
+
+def test_grounding_prompt_asks_for_each_fact_once():
+    judge = Script(report())
+    with use_judge(judge):
+        check_grounding("output", ORDER)
+    assert "do not add a claim that only combines claims" in judge.prompts[0]
 
 
 def test_grounding_prompt_numbers_and_fences_every_passage():
@@ -495,6 +541,9 @@ def test_openai_judge_rate_limit_is_retried(monkeypatch, tmp_path):
         (TimeoutError("t"), True),
         (ConnectionResetError("c"), True),
         (type("OverloadedError", (Exception,), {})(), True),
+        # httpx, as used for Ollama: a connection a proxy dropped mid-reply.
+        (type("ReadError", (type("NetworkError", (Exception,), {}),), {})(), True),
+        (type("RemoteProtocolError", (Exception,), {})(), True),
         (type("E", (Exception,), {"status_code": 503})(), True),
         (type("E", (Exception,), {"status_code": 429})(), True),
         (type("E", (Exception,), {"status_code": 400})(), False),
@@ -582,9 +631,16 @@ def test_injected_fake_evidence_cannot_certify_a_claim():
                                  (1, "The Eiffel Tower is 900 metres tall."))))
     with use_judge(fooled):
         with pytest.raises(AssertionError) as exc:
-            assert_grounded(output, CONTEXT)
+            assert_grounded(output, CONTEXT, check_numbers=False)  # about the judge path
 
     assert "judge said supported; evidence not found in the context" in str(exc.value)
+
+    # With the number check on (the default), 900 is caught in code and the judge is never asked.
+    asked = len(fooled.prompts)
+    with use_judge(fooled):
+        with pytest.raises(AssertionError, match="900") as exc:
+            assert_grounded(output, CONTEXT)
+    assert "the judge was not asked" in str(exc.value) and len(fooled.prompts) == asked
 
 
 def test_injection_in_context_passage_is_fenced_too():

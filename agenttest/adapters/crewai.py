@@ -123,6 +123,11 @@ class CrewAIAdapter(BaseAdapter):
         self._record(result)
         return result
 
+    def turn_arguments(self, history: list[dict[str, str]], previous: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Crews take template inputs: use ``{message}`` and ``{history}`` in task descriptions."""
+        transcript = "\n".join(f"{m['role']}: {m['content']}" for m in history[:-1])
+        return ({"message": history[-1]["content"], "history": transcript},), {}
+
     @staticmethod
     def _record(result: Any) -> None:
         steps = [

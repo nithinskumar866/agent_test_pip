@@ -2,15 +2,18 @@
 
 from agenttest.mocks._registry import (
     MOCK_REGISTRY,
+    REAL,
     MockedToolError,
     MockHandle,
     apply_mock,
     apply_mock_async,
 )
 from agenttest.mocks.tool_failure import (
+    mock_tool,
     mock_tool_failure,
     mock_tool_latency,
     mock_tool_response,
+    mock_tool_sequence,
 )
 
 __all__ = [
@@ -22,4 +25,7 @@ __all__ = [
     "mock_tool_failure",
     "mock_tool_response",
     "mock_tool_latency",
+    "mock_tool_sequence",
+    "mock_tool",
+    "REAL",
 ]

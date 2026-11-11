@@ -6,11 +6,20 @@
 | :--- | :--- | :--- | :--- |
 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-5-5` |
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` |
-| Gemini | `gemini` | `GOOGLE_API_KEY` | `gemini-1.5-flash` |
+| Gemini | `gemini` | `GOOGLE_API_KEY` | `gemini-3.6-flash` |
 | Ollama | `ollama` | (local server) | `llama3` |
 | None | `none` | - | semantic assertions raise; structural ones work |
 
 Set `judge_model` in `agenttest.config.json` to use another model.
+
+### Ollama on another machine (RunPod, a GPU server)
+
+```json
+{"judge_provider": "ollama", "judge_model": "llama3.1:8b", "judge_base_url": "https://<pod-id>-11434.proxy.runpod.net"}
+```
+
+`OLLAMA_HOST` works too. If the server sits behind an authenticating proxy, set `OLLAMA_API_KEY` and it's
+sent as a bearer token. Ollama judges get a 600-second timeout by default, because CPU inference is slow.
 
 ## Grounded hallucination checks
 
@@ -46,6 +55,34 @@ out is downgraded to `unsupported`, and the rejected quote is kept on the claim 
 judge that was misled, for instance by text planted in the agent's output, can't certify a claim
 without real evidence from the context.
 
+**Invented numbers are caught in code first.** Order numbers, dates, prices, tracking codes: when an agent
+makes something up, it is very often a number. Before the judge is asked, `assert_grounded` checks that
+every number in the output appears somewhere in the context. That needs no model, so it is free, instant,
+and never wrong about the numbers it compares. Numbers are compared by value ("1,000" = "1000", "3rd" = "3",
+"06" = "6"), and digits inside identifiers count ("GLK1321" contributes 1321). It can't see numbers written
+as words, and it only knows a number *appears* in the context, not that it is used correctly; that part
+stays with the judge. Turn it off with `check_numbers=False`, or use it on its own:
+
+```python
+from agenttest import assert_numbers_grounded, invented_numbers_in
+
+assert_numbers_grounded(result)                    # no judge needed
+assert_numbers_grounded(result, ignore=[24])       # e.g. "we reply within 24 hours" from the prompt
+invented_numbers_in(result)                        # ["99812"]
+```
+
+**A second look at doubtful claims.** A judge reading a whole answer at once sometimes misses support it
+would find for a single claim; small local models do this most. So each claim judged `unsupported` (up to
+five per check) is asked about again on its own. It only becomes `supported` if every part of the second
+answer is supported by quotes that are verified in code *and* those quotes contain every number in the
+claim, so an invented number can't be waved through. Each second look is one extra judge call, made only
+for claims that would otherwise fail. Turn it off with `"judge_recheck": false`. The report marks claims
+confirmed this way: `(confirmed on a second look)`.
+
+A claim that only joins claims already supported ("A and B" next to "A" and "B") is not counted as
+unsupported either: each part must match a verified claim exactly, so a changed or added fact inside
+the combination still fails.
+
 ## Reliability
 
 - **Prompt injection.** The agent's output and every context passage are enclosed in markers derived
@@ -53,11 +90,13 @@ without real evidence from the context.
   the judge that enclosed text is data and that instructions inside it must not be followed.
 - **Malformed replies** get one retry with the parse error attached, then raise `AgentTestJudgeError`.
   They are never cached.
-- **API failures.** Timeouts, connection errors, rate limits (429) and server errors (5xx) are retried
+- **API failures.** Timeouts, connection errors (including a connection a proxy dropped mid-reply), rate
+  limits (429) and server errors (5xx) are retried
   with exponential backoff. Other API errors, empty replies and refusals raise `AgentTestJudgeError`.
-- **Determinism.** OpenAI, Gemini and Ollama judges run at temperature 0. The Anthropic API no longer
-  accepts sampling parameters, so Claude judges rely on the strict reply formats and the evidence checks.
+- **Determinism.** OpenAI and Ollama judges run at temperature 0. Current Anthropic and Gemini models don't
+  accept sampling parameters, so those judges rely on the strict reply formats and the evidence checks.
 - **Caching.** Successful judge replies are cached for the session, keyed by provider, model and prompt.
+  Set `"judge_cache": true` to keep them on disk between sessions.
 
 Configure in `agenttest.config.json`:
 
@@ -66,7 +105,25 @@ Configure in `agenttest.config.json`:
 | `judge_provider` | `"anthropic"` | `anthropic`, `openai`, `gemini`, `ollama` or `none`. |
 | `judge_model` | provider default | Model id. |
 | `judge_max_retries` | `2` | Retries for transient API failures. |
-| `judge_timeout` | `60` | Seconds per judge API call. |
+| `judge_timeout` | `60` (`600` for Ollama) | Seconds per judge call. |
+| `judge_recheck` | `true` | Give each claim judged unsupported a second look on its own. |
+
+## How accurate is your judge?
+
+Measure it instead of assuming. `agenttest benchmark` runs 100 labelled cases through your configured judge,
+using invented facts so that it can't rely on its own knowledge:
+
+```bash
+agenttest benchmark --json benchmark.json --min-accuracy 0.9
+```
+
+It reports accuracy for correct answers, hallucinations, contradictions, self-contradicting sources and
+prompt injection, plus how often good answers were rejected and bad ones accepted. It makes real judge calls
+(about 100), so it costs money; `--limit 4` runs a 20-case sample.
+
+The benchmark scores the judge alone (including its second look). The code-only number check is left
+out on purpose: most contradicted cases turn on a changed number, so it would settle them without the
+judge and hide how good the judge really is.
 
 ## Testing your tests: scripted judges
 

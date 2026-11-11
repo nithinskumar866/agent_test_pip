@@ -15,11 +15,13 @@ _ADAPTER_PATHS: Final[dict[str, str]] = {
     "crewai": "agenttest.adapters.crewai:CrewAIAdapter",
     "openai": "agenttest.adapters.openai_sdk:OpenAIAdapter",
     "anthropic": "agenttest.adapters.anthropic_sdk:AnthropicAdapter",
+    "pydantic-ai": "agenttest.adapters.pydantic_ai:PydanticAIAdapter",
+    "llamaindex": "agenttest.adapters.llamaindex:LlamaIndexAdapter",
     "generic": "agenttest.adapters.base:GenericAdapter",
 }
 
 #: Adapters that can recognise an agent by its type, in detection order.
-_DETECTABLE: Final[tuple[str, ...]] = ("langgraph", "openai", "crewai")
+_DETECTABLE: Final[tuple[str, ...]] = ("langgraph", "openai", "crewai", "pydantic-ai", "llamaindex")
 
 
 def _adapter_class(framework: str) -> type[BaseAdapter]:

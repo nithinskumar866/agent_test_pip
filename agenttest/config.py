@@ -21,6 +21,7 @@ __all__ = [
     "AgentTestTimeoutError",
     "AgentTestPassRateError",
     "AgentTestFlakyWarning",
+    "AgentTestBudgetError",
     "AgentTestConfig",
     "FRAMEWORKS",
     "JUDGE_PROVIDERS",
@@ -30,7 +31,9 @@ __all__ = [
 ]
 
 CONFIG_FILENAME: Final[str] = "agenttest.config.json"
-FRAMEWORKS: Final[tuple[str, ...]] = ("langgraph", "crewai", "openai", "anthropic", "generic")
+FRAMEWORKS: Final[tuple[str, ...]] = (
+    "langgraph", "crewai", "openai", "anthropic", "pydantic-ai", "llamaindex", "generic",
+)
 JUDGE_PROVIDERS: Final[tuple[str, ...]] = ("anthropic", "openai", "gemini", "ollama", "none")
 
 
@@ -61,6 +64,10 @@ class AgentTestPassRateError(AgentTestError, AssertionError):
     """
 
 
+class AgentTestBudgetError(AgentTestError, AssertionError):
+    """A test used more tokens or money than its budget allows. Never retried."""
+
+
 class AgentTestFlakyWarning(UserWarning):
     """Emitted when an agent test passed only after retries or with some runs failing."""
 
@@ -86,8 +93,18 @@ class AgentTestConfig(BaseModel):
     min_pass_rate: float = Field(default=1.0, gt=0.0, le=1.0)
     #: Retries for transient judge API failures (timeouts, 429, 5xx).
     judge_max_retries: int = Field(default=2, ge=0)
-    #: Seconds before one judge API call is abandoned.
-    judge_timeout: float = Field(default=60.0, gt=0.0)
+    #: Seconds before one judge call is abandoned (default: 60, or 600 for a local Ollama model).
+    judge_timeout: float | None = Field(default=None, gt=0.0)
+    #: Ollama server for the judge, e.g. a RunPod proxy URL (default: ``OLLAMA_HOST``, then localhost).
+    judge_base_url: str | None = None
+    #: Give each claim judged unsupported a second look on its own (one extra judge call each).
+    judge_recheck: bool = True
+    #: Keep judge replies on disk between sessions (in ``.agenttest_cache/``).
+    judge_cache: bool = False
+    #: Extra model prices, USD per million tokens: ``{"my-model": {"input": 1, "output": 3}}``.
+    pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
+    #: Extra regular expressions to hide in reports and cassettes.
+    redact_patterns: list[str] = Field(default_factory=list)
 
     @field_validator("framework")
     @classmethod

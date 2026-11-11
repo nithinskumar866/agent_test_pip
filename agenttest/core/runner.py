@@ -24,7 +24,7 @@ import time
 import traceback as tb
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from agenttest.adapters import BaseAdapter, resolve_adapter
@@ -36,6 +36,15 @@ from agenttest.reporting import record_result
 __all__ = ["run", "arun", "run_agent_test", "RunSettings", "current_settings", "settings_scope"]
 
 
+@dataclass
+class Usage:
+    """Tokens and money spent by the runs inside one test."""
+
+    tokens: int = 0
+    cost_usd: float = 0.0
+    priced: bool = True
+
+
 @dataclass(frozen=True)
 class RunSettings:
     """Per-test overrides installed by ``@agent_test``."""
@@ -43,6 +52,7 @@ class RunSettings:
     timeout: float | None = None
     max_retries: int = 0
     model_override: str | None = None
+    usage: Usage = field(default_factory=Usage)
 
 
 _SETTINGS: contextvars.ContextVar[RunSettings | None] = contextvars.ContextVar(
@@ -80,6 +90,13 @@ def _prepare(agent: Any, adapter: BaseAdapter | str | None, timeout: float | Non
 def _finish(*args: Any, **kwargs: Any) -> AgentResult:
     result = _build_result(*args, **kwargs)
     record_result(result)
+    settings = current_settings()
+    if settings is not None:
+        settings.usage.tokens += result.tokens_used
+        if result.cost_usd is None:
+            settings.usage.priced = False
+        else:
+            settings.usage.cost_usd += result.cost_usd
     return result
 
 

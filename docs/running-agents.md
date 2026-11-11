@@ -111,6 +111,12 @@ async def search(query: str) -> str: ...
 Calls are recorded as tool steps (with input, output, error and timing) only during an agenttest run,
 and the decorated function works normally outside of one. Tool mocks match these names.
 
+## Budgets, replay and datasets
+
+`@agent_test` also takes `max_tokens=`, `max_cost_usd=` ([cost and budgets](cost.md)) and `cassette=`
+([record and replay](replay.md)). For multi-turn tests see [conversations](conversations.md), and to run one
+test over many cases see [datasets](datasets.md).
+
 ## Custom adapters
 
 To support another framework, subclass `BaseAdapter` and pass an instance as `adapter=`:

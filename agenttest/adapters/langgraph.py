@@ -21,13 +21,16 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Final
 
 from agenttest.adapters._langchain_tools import ToolRun, current_tool_log, langchain_tool_mocks
 from agenttest.adapters.base import BaseAdapter, call_agent
 from agenttest.core.trace import current_trace, record_step
 
 __all__ = ["LangGraphAdapter"]
+
+#: What ``run(graph, input, stream=True)`` listens to.
+_MODES: Final[list[str]] = ["updates", "messages"]
 
 
 def _messages_in(update: Any) -> list[Any]:
@@ -63,9 +66,10 @@ class LangGraphAdapter(BaseAdapter):
         if not hasattr(agent, "stream"):
             return call_agent(agent, *args, **kwargs)
         run = _GraphRun(self)
+        stream = kwargs.pop("stream", False)
         try:
-            for chunk in agent.stream(*args, stream_mode="updates", **kwargs):
-                run.on_chunk(chunk)
+            for chunk in agent.stream(*args, stream_mode=_MODES if stream else "updates", **kwargs):
+                run.on_event(chunk, stream)
         finally:
             run.close()
         return run.state
@@ -74,21 +78,28 @@ class LangGraphAdapter(BaseAdapter):
         if not hasattr(agent, "astream"):
             return await super().ainvoke(agent, *args, **kwargs)
         run = _GraphRun(self)
+        stream = kwargs.pop("stream", False)
         try:
-            async for chunk in agent.astream(*args, stream_mode="updates", **kwargs):
-                run.on_chunk(chunk)
+            async for chunk in agent.astream(*args, stream_mode=_MODES if stream else "updates", **kwargs):
+                run.on_event(chunk, stream)
         finally:
             run.close()
         return run.state
+
+    def turn_arguments(self, history: list[dict[str, str]], previous: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        return ({"messages": [(m["role"], m["content"]) for m in history]},), {}
 
     def _record_node(self, node: str, update: Any, duration_ms: float) -> set[str]:
         messages = _messages_in(update)
         input_tokens = output_tokens = 0
         requested: list[str] = []
+        model: str | None = None
         for message in messages:
             i, o = _usage_of(message)
             input_tokens += i
             output_tokens += o
+            metadata = getattr(message, "response_metadata", None) or {}
+            model = model or metadata.get("model_name") or metadata.get("model")
             for call in getattr(message, "tool_calls", None) or []:
                 tool_name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
                 if tool_name:
@@ -102,6 +113,7 @@ class LangGraphAdapter(BaseAdapter):
             duration_ms=duration_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            model=model,
             tool_requests=requested,
         )
         for message in messages:
@@ -153,7 +165,21 @@ class _GraphRun:
         self.state: dict[str, Any] = {}
         self.log = current_tool_log()
         self.seen_ids: set[str] = set()
-        self.last = time.perf_counter()
+        self.last = self.started = time.perf_counter()
+        self.stream_chunks = 0
+        self.first_chunk_ms: float | None = None
+
+    def on_event(self, event: Any, stream: bool) -> None:
+        if not stream:
+            self.on_chunk(event)
+            return
+        mode, payload = event
+        if mode == "updates":
+            self.on_chunk(payload)
+        elif mode == "messages":
+            self.stream_chunks += 1
+            if self.first_chunk_ms is None:
+                self.first_chunk_ms = (time.perf_counter() - self.started) * 1000
 
     def on_chunk(self, chunk: Any) -> None:
         now = time.perf_counter()
@@ -174,7 +200,9 @@ class _GraphRun:
         self.last = now
 
     def close(self) -> None:
-        """Record tool runs whose ToolMessage never arrived (e.g. the graph crashed)."""
+        """Record the streaming summary, and tool runs whose ToolMessage never arrived."""
+        if self.stream_chunks:
+            record_step("llm", "stream", metadata={"first_chunk_ms": self.first_chunk_ms, "chunks": self.stream_chunks})
         if self.log is None:
             return
         for run in self.log.take():

@@ -21,3 +21,4 @@ htmlcov/
 
 # Local configuration
 agenttest.config.json
+coverage.xml

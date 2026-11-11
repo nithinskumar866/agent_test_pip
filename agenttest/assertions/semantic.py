@@ -26,8 +26,9 @@ import re
 from typing import Any, Final
 
 from agenttest.assertions.structural import excerpt, fail
-from agenttest.core.result import _judge_llm
+from agenttest.core.result import _judge_llm, _judge_settings
 from agenttest.judge.grounding import GroundingReport, evaluate_grounding, passages_from
+from agenttest.judge.numbers import invented_numbers, numbers_in
 from agenttest.judge.protocol import ask, fence
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "satisfies",
     "check_grounding",
     "is_grounded",
+    "invented_numbers_in",
     # assertions
     "assert_contains_fact",
     "assert_hallucination_score",
@@ -49,6 +51,7 @@ __all__ = [
     "assert_language_matches",
     "assert_eval_prompt",
     "assert_grounded",
+    "assert_numbers_grounded",
 ]
 
 _VERDICT: Final[re.Pattern[str]] = re.compile(r"^\W*(YES|NO)\b", re.IGNORECASE)
@@ -129,7 +132,7 @@ def satisfies(output: Any, instruction: str) -> bool:
     return _ask_yes_no(_criteria_question(instruction), _text(output))[0]
 
 
-def check_grounding(output: Any, context: Any = None) -> GroundingReport:
+def check_grounding(output: Any, context: Any = None, *, recheck: bool | None = None) -> GroundingReport:
     """Check every factual claim in ``output`` against ``context``.
 
     Args:
@@ -137,17 +140,33 @@ def check_grounding(output: Any, context: Any = None) -> GroundingReport:
         context: The documents or tool results the agent was given: a string
             or a list of strings. Defaults to the successful tool outputs on
             ``output.trace``.
+        recheck: Give each claim judged unsupported a second look on its own.
+            Defaults to ``judge_recheck`` in the config (on).
 
     Raises:
         ValueError: If there is no context to check against.
         AgentTestJudgeError: If the judge fails or keeps replying malformed JSON.
     """
-    return evaluate_grounding(_text(output), passages_from(output, context), _judge_llm)
+    if recheck is None:
+        recheck = bool(_judge_settings().get("judge_recheck", True))
+    return evaluate_grounding(_text(output), passages_from(output, context), _judge_llm, recheck=recheck)
 
 
-def is_grounded(output: Any, context: Any = None, *, max_unsupported: float = 0.0) -> bool:
+def is_grounded(output: Any, context: Any = None, *, max_unsupported: float = 0.0, check_numbers: bool = True) -> bool:
     """Predicate form of :func:`assert_grounded`."""
-    return not _grounding_problems(check_grounding(output, context), max_unsupported, allow_disputed=False)
+    if check_numbers and invented_numbers_in(output, context):
+        return False
+    report = check_grounding(output, context)
+    return not _grounding_problems(report, max_unsupported, allow_disputed=False, check_numbers=check_numbers)
+
+
+def invented_numbers_in(output: Any, context: Any = None, *, ignore: Any = ()) -> list[str]:
+    """Numbers in ``output`` that appear nowhere in ``context``: checked in code, no judge.
+
+    ``context`` works as in :func:`check_grounding`. ``ignore`` lists numbers
+    that are allowed anyway, e.g. ones from the user's question.
+    """
+    return invented_numbers(_text(output), passages_from(output, context), ignore=ignore)
 
 
 def hallucination_score(output: Any, context: Any = None) -> float:
@@ -224,8 +243,16 @@ def assert_hallucination_score_below(result: Any, threshold: float) -> bool:
     return True
 
 
-def _grounding_problems(report: GroundingReport, max_unsupported: float, allow_disputed: bool) -> list[str]:
+def _numbers_problem(numbers: list[str]) -> str:
+    return f"the output contains number(s) found nowhere in the context: {', '.join(numbers)}"
+
+
+def _grounding_problems(
+    report: GroundingReport, max_unsupported: float, allow_disputed: bool, *, check_numbers: bool = True
+) -> list[str]:
     problems = []
+    if check_numbers and report.invented_numbers:
+        problems.append(_numbers_problem(report.invented_numbers))
     if report.injection_detected:
         problems.append("the output contains instructions aimed at the evaluator (possible prompt injection)")
     if report.contradicted:
@@ -246,28 +273,50 @@ def assert_grounded(
     *,
     max_unsupported: float = 0.0,
     allow_disputed: bool = False,
+    check_numbers: bool = True,
 ) -> GroundingReport:
     """Assert that ``output`` is grounded in ``context``.
 
-    Fails when any claim is contradicted by the context, when more than
-    ``max_unsupported`` of the claims are unsupported, when a claim rests on
-    passages that disagree with each other (unless ``allow_disputed``), or
-    when the output tries to instruct the evaluator.
+    Fails when the output contains a number that is nowhere in the context
+    (checked in code first, so no judge call is spent; turn off with
+    ``check_numbers=False``), when any claim is contradicted by the context,
+    when more than ``max_unsupported`` of the claims are unsupported, when a
+    claim rests on passages that disagree with each other (unless
+    ``allow_disputed``), or when the output tries to instruct the evaluator.
 
     Args:
         output: An ``AgentResult`` or text.
         context: A string or list of strings; defaults to the run's tool outputs.
         max_unsupported: Allowed fraction (0-1) of unsupported claims.
         allow_disputed: Accept claims that rest on self-contradicting context.
+        check_numbers: Fail on numbers that appear nowhere in the context.
 
     Returns:
         The :class:`~agenttest.judge.GroundingReport`, for further checks.
     """
     if not 0.0 <= max_unsupported <= 1.0:
         raise ValueError("max_unsupported must be between 0.0 and 1.0")
+    if check_numbers:
+        invented = invented_numbers_in(output, context)
+        if invented:
+            fail("Expected the output to be grounded in the context, but " + _numbers_problem(invented)
+                 + " (checked in code; the judge was not asked).", output)
     report = check_grounding(output, context)
-    problems = _grounding_problems(report, max_unsupported, allow_disputed)
+    problems = _grounding_problems(report, max_unsupported, allow_disputed, check_numbers=check_numbers)
     if problems:
         fail("Expected the output to be grounded in the context, but " + "; ".join(problems) + ".\n"
              f"{report.describe()}\n  output: {excerpt(_text(output))!r}")
     return report
+
+
+def assert_numbers_grounded(output: Any, context: Any = None, *, ignore: Any = ()) -> list[str]:
+    """Assert every number in ``output`` appears in ``context``: no judge, free and instant.
+
+    Catches invented order numbers, dates, prices and tracking codes. Returns
+    the numbers that were checked. See :func:`invented_numbers_in`.
+    """
+    invented = invented_numbers_in(output, context, ignore=ignore)
+    if invented:
+        fail("Expected every number in the output to appear in the context, but these do not: "
+             + ", ".join(invented) + ".", output)
+    return numbers_in(_text(output))

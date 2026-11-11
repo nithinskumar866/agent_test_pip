@@ -2,7 +2,7 @@
 
 Every `assert_*` function raises `AssertionError` with the expected value, the actual value and an
 excerpt of the output, and returns `True` when it passes. Each accepts an `AgentResult` or the raw
-value. Boolean versions without the `assert_` prefix (`tool_was_called`, `contains_fact`, ...) live in
+value (the tool-argument checks need an `AgentResult` or `Conversation`). Boolean versions without the `assert_` prefix (`tool_was_called`, `contains_fact`, ...) live in
 `agenttest.assertions`.
 
 ## Structural (no API key needed)
@@ -18,6 +18,11 @@ value. Boolean versions without the `assert_` prefix (`tool_was_called`, `contai
 | `assert_output_contains(result, substring)` | Case-insensitive substring. |
 | `assert_output_matches_regex(result, pattern)` | Regex search. |
 | `assert_output_is_valid_json(result)` | The output parses as JSON. |
+| `assert_tool_called_with(result, name, **args)` | Some call had these arguments; other arguments may differ. |
+| `assert_tool_call_count(result, name, n)` | The tool was called exactly `n` times. |
+| `assert_tools_in_order(result, [names])` | These tools ran in this order; others may come between. |
+| `assert_no_tool_errors(result)` | Every tool call succeeded. |
+| `assert_cost_under(result, usd)` | The estimated cost is below `usd`. See [cost](cost.md). |
 | `assert_gracefully_degraded(result)` | A tool failed, yet the agent still answered. If not, the error says whether it crashed, no tool failed, or there was no output. |
 
 ## Semantic (judge model required)

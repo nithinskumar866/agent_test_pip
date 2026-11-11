@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final
 
+from agenttest.redaction import redact
+
 if TYPE_CHECKING:
     from agenttest.core.result import AgentResult
 
@@ -83,20 +85,21 @@ class TestRecord:
     duration_s: float = 0.0
     agent_marked: bool = False
     message: str | None = None
-    runs: list[AgentResult] = field(default_factory=list)
+    #: ``result_to_dict`` output (results are also accepted, and converted when reported).
+    runs: list[Any] = field(default_factory=list)
 
 
 # --- text ----------------------------------------------------------------------------
 
 def _short(value: Any, limit: int = 120) -> str:
-    text = value if isinstance(value, str) else repr(value)
+    text = redact(value if isinstance(value, str) else repr(value))
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def describe_result(result: AgentResult, title: str = "agent run") -> str:
     """Multi-line, human-readable account of one run: status, totals, each step, output."""
-    status = "ok" if result.success else f"FAILED ({result.error})"
+    status = "ok" if result.success else f"FAILED ({redact(result.error or '')})"
     lines = [
         f"{title}: {status} - {result.latency_ms:.0f} ms, {result.steps_taken} steps, "
         f"{result.tokens_used} tokens"
@@ -129,6 +132,7 @@ def _jsonable(value: Any, depth: int = 0) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
+        value = redact(value)
         return value if len(value) <= _MAX_TEXT else value[:_MAX_TEXT] + "…"
     if depth >= 4:
         return _jsonable(repr(value), depth)
@@ -144,9 +148,11 @@ def _jsonable(value: Any, depth: int = 0) -> Any:
 
 def result_to_dict(result: AgentResult) -> dict[str, Any]:
     return {
+        "cost_usd": result.cost_usd,
+        "tool_calls": len(result.trace.tool_calls),
         "success": result.success,
         "output": _jsonable(result.output),
-        "error": result.error,
+        "error": _jsonable(result.error),
         "latency_ms": round(result.latency_ms, 2),
         "steps_taken": result.steps_taken,
         "tools_called": result.tools_called,
@@ -159,7 +165,7 @@ def result_to_dict(result: AgentResult) -> dict[str, Any]:
                 "name": s.name,
                 "input": _jsonable(s.input),
                 "output": _jsonable(s.output),
-                "error": s.error,
+                "error": _jsonable(s.error),
                 "duration_ms": round(s.duration_ms, 2),
                 "input_tokens": s.input_tokens,
                 "output_tokens": s.output_tokens,
@@ -171,11 +177,34 @@ def result_to_dict(result: AgentResult) -> dict[str, Any]:
     }
 
 
+def _as_dict(run: Any) -> dict[str, Any]:
+    return run if isinstance(run, dict) else result_to_dict(run)
+
+
+def total_cost(runs: list[dict[str, Any]]) -> float | None:
+    """Sum of the runs' costs; ``None`` if any of them is unknown."""
+    costs = [r.get("cost_usd") for r in runs]
+    if any(c is None for c in costs):
+        return None
+    return round(sum(c for c in costs if c is not None), 6)
+
+
 def build_report(tests: list[TestRecord], flaky: list[Any], *, duration_s: float) -> dict[str, Any]:
     """The ``--agenttest-report`` document."""
     from agenttest import __version__
 
-    runs = [run for test in tests for run in test.runs]
+    rendered = [
+        {
+            "nodeid": t.nodeid,
+            "outcome": t.outcome,
+            "duration_s": round(t.duration_s, 4),
+            "agent_marked": t.agent_marked,
+            "message": _jsonable(t.message),
+            "runs": [_as_dict(r) for r in t.runs],
+        }
+        for t in tests
+    ]
+    runs = [run for test in rendered for run in test["runs"]]
     outcomes: dict[str, int] = {}
     for test in tests:
         outcomes[test.outcome] = outcomes.get(test.outcome, 0) + 1
@@ -187,26 +216,119 @@ def build_report(tests: list[TestRecord], flaky: list[Any], *, duration_s: float
             "tests": len(tests),
             **{k: outcomes.get(k, 0) for k in ("passed", "failed", "skipped")},
             "agent_runs": len(runs),
-            "failed_runs": sum(not r.success for r in runs),
-            "tokens_used": sum(r.tokens_used for r in runs),
-            "tool_calls": sum(len(r.trace.tool_calls) for r in runs),
-            "failed_tool_calls": sum(len(r.trace.failed_tool_calls) for r in runs),
-            "agent_latency_ms": round(sum(r.latency_ms for r in runs), 2),
+            "failed_runs": sum(not r["success"] for r in runs),
+            "tokens_used": sum(r["tokens_used"] for r in runs),
+            "cost_usd": total_cost(runs),
+            "tool_calls": sum(r["tool_calls"] for r in runs),
+            "failed_tool_calls": sum(len(r["failed_tools"]) for r in runs),
+            "agent_latency_ms": round(sum(r["latency_ms"] for r in runs), 2),
             "flaky": len(flaky),
         },
-        "tests": [
-            {
-                "nodeid": t.nodeid,
-                "outcome": t.outcome,
-                "duration_s": round(t.duration_s, 4),
-                "agent_marked": t.agent_marked,
-                "message": _jsonable(t.message),
-                "runs": [result_to_dict(r) for r in t.runs],
-            }
-            for t in tests
-        ],
-        "flaky": [{"test": f.test_name, "summary": f.summary()} for f in flaky],
+        "tests": rendered,
+        "flaky": [f if isinstance(f, dict) else {"test": f.test_name, "summary": f.summary()} for f in flaky],
     }
+
+
+# --- markdown and comparison -----------------------------------------------------
+
+def _cost_text(cost: float | None) -> str:
+    return "unknown" if cost is None else f"${cost:.4f}"
+
+
+def _cell(text: Any) -> str:
+    """Safe inside a markdown table, and unable to inject mentions or markup."""
+    return " ".join(str(text).split()).replace("|", "\\|").replace("@", "@\u200b").replace("<", "&lt;")
+
+
+def render_markdown(report: dict[str, Any], comparison: dict[str, Any] | None = None) -> str:
+    """A report as markdown, for a pull request comment or job summary."""
+    s = report["summary"]
+    icon = "\u274c" if s["failed"] else "\u2705"
+    lines = [
+        "<!-- agenttest-report -->",
+        f"### {icon} agenttest: {s['passed']} passed, {s['failed']} failed, {s['skipped']} skipped",
+        "",
+        f"{s['agent_runs']} agent runs \u00b7 {s['tokens_used']} tokens \u00b7 cost {_cost_text(s.get('cost_usd'))} "
+        f"\u00b7 {s['failed_tool_calls']} failed tool calls \u00b7 {s['flaky']} flaky",
+    ]
+    failed = [t for t in report["tests"] if t["outcome"] == "failed"]
+    if failed:
+        lines += ["", "| Failed test | Why |", "| :--- | :--- |"]
+        lines += [f"| `{_cell(t['nodeid'])}` | {_cell(t['message'] or '')[:300]} |" for t in failed[:30]]
+        if len(failed) > 30:
+            lines.append(f"\n...and {len(failed) - 30} more.")
+    if report["flaky"]:
+        lines += ["", "**Flaky:**"] + [f"- `{_cell(f['test'])}`: {_cell(f['summary'])}" for f in report["flaky"][:30]]
+    if comparison is not None:
+        lines += ["", render_comparison(comparison)]
+    return "\n".join(lines) + "\n"
+
+
+def _change(before: float, after: float) -> float | None:
+    return None if before == 0 else round((after - before) / before * 100, 1)
+
+
+def compare_reports(
+    baseline: dict[str, Any],
+    current: dict[str, Any],
+    *,
+    max_token_increase: float | None = None,
+    max_cost_increase: float | None = None,
+) -> dict[str, Any]:
+    """What changed between two reports, and whether that counts as a regression.
+
+    Args:
+        max_token_increase: Percent growth in total tokens treated as a regression.
+        max_cost_increase: Percent growth in total cost treated as a regression.
+    """
+    old = {t["nodeid"]: t for t in baseline["tests"]}
+    new = {t["nodeid"]: t for t in current["tests"]}
+    shared = sorted(old.keys() & new.keys())
+    newly_failing = [n for n in shared if old[n]["outcome"] == "passed" and new[n]["outcome"] == "failed"]
+    newly_passing = [n for n in shared if old[n]["outcome"] == "failed" and new[n]["outcome"] == "passed"]
+    a, b = baseline["summary"], current["summary"]
+    tokens_pct = _change(a["tokens_used"], b["tokens_used"])
+    cost_a, cost_b = a.get("cost_usd"), b.get("cost_usd")
+    cost_pct = _change(cost_a, cost_b) if cost_a is not None and cost_b is not None else None
+    reasons = [f"{len(newly_failing)} test(s) newly failing"] if newly_failing else []
+    if max_token_increase is not None and tokens_pct is not None and tokens_pct > max_token_increase:
+        reasons.append(f"tokens grew {tokens_pct}% (allowed {max_token_increase:g}%)")
+    if max_cost_increase is not None and cost_pct is not None and cost_pct > max_cost_increase:
+        reasons.append(f"cost grew {cost_pct}% (allowed {max_cost_increase:g}%)")
+    return {
+        "newly_failing": newly_failing,
+        "newly_passing": newly_passing,
+        "added": sorted(new.keys() - old.keys()),
+        "removed": sorted(old.keys() - new.keys()),
+        "tokens": {"before": a["tokens_used"], "after": b["tokens_used"], "change_pct": tokens_pct},
+        "cost_usd": {"before": cost_a, "after": cost_b, "change_pct": cost_pct},
+        "regressions": reasons,
+    }
+
+
+def render_comparison(comparison: dict[str, Any]) -> str:
+    """A comparison as markdown (also readable as plain text)."""
+    def pct(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:+g}%"
+
+    tokens, cost = comparison["tokens"], comparison["cost_usd"]
+    reasons = comparison["regressions"]
+    verdict = "**Regressions:** " + "; ".join(reasons) if reasons else "No regressions."
+    lines = [
+        "#### Compared with baseline",
+        "",
+        verdict,
+        "",
+        f"- Tokens: {tokens['before']} -> {tokens['after']} ({pct(tokens['change_pct'])})",
+        f"- Cost: {_cost_text(cost['before'])} -> {_cost_text(cost['after'])} ({pct(cost['change_pct'])})",
+    ]
+    for label, key in [("Newly failing", "newly_failing"), ("Newly passing", "newly_passing"),
+                       ("Added", "added"), ("Removed", "removed")]:
+        if comparison[key]:
+            names = ", ".join(f"`{_cell(n)}`" for n in comparison[key][:20])
+            more = f" and {len(comparison[key]) - 20} more" if len(comparison[key]) > 20 else ""
+            lines.append(f"- {label} ({len(comparison[key])}): {names}{more}")
+    return "\n".join(lines)
 
 
 # --- HTML ----------------------------------------------------------------------------
@@ -236,7 +358,7 @@ def render_html(report: dict[str, Any]) -> str:
         f'<div class="tile"><b>{_esc(value)}</b>{_esc(label)}</div>'
         for label, value in [
             ("tests", s["tests"]), ("passed", s["passed"]), ("failed", s["failed"]), ("skipped", s["skipped"]),
-            ("agent runs", s["agent_runs"]), ("tokens", s["tokens_used"]),
+            ("agent runs", s["agent_runs"]), ("tokens", s["tokens_used"]), ("cost", _cost_text(s.get("cost_usd"))),
             ("failed tool calls", s["failed_tool_calls"]), ("flaky", s["flaky"]),
         ]
     )

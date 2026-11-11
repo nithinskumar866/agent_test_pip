@@ -14,7 +14,7 @@ The core install includes no model SDK. Pick extras for what you use:
 | Extra | Installs | For |
 | :--- | :--- | :--- |
 | `anthropic`, `openai`, `gemini`, `ollama` | the provider SDK (httpx for Ollama) | the judge |
-| `langgraph`, `crewai`, `openai-agents` | the framework | testing agents built with it |
+| `langgraph`, `crewai`, `openai-agents`, `pydantic-ai`, `llamaindex` | the framework | testing agents built with it |
 | `all` | everything above | |
 
 Structural assertions, tool mocking, reports and `use_judge` scripted judges need no extra at all.
@@ -80,4 +80,4 @@ See [Reports and CI](reports-and-ci.md).
 - [Frameworks](frameworks.md): LangGraph, CrewAI, the OpenAI Agents SDK and the Anthropic SDK.
 - [Assertions](assertions.md) and [grounded hallucination checks](judge.md).
 - [Tool mocking](mocking.md).
-- Runnable examples: [`examples/`](../examples).
+- Runnable examples: [`examples/`](https://github.com/nithinskumar866/agent_test_pip/tree/main/examples).
