@@ -199,6 +199,57 @@ def _verify(claim: _ClaimReply, passages: list[str]) -> ClaimVerdict:
     )
 
 
+#: Where a compound claim joins its parts: "A and B", "A, B", "A; B".
+_JOINS: Final = re.compile(r"\s*(?:,\s*and\s+|;\s*|,\s*|\s+and\s+)")
+_TRAILING: Final = re.compile(r"[\s.!?]+$")
+
+
+def _covers(part: str, supported: str, compound: str) -> bool:
+    """Whether ``supported`` states ``part`` of ``compound``.
+
+    Either the part *is* the supported claim, or it is that claim with its
+    subject elided — "A was shipped on 3 March and **is expected to arrive on
+    6 March**" — in which case the elided subject must be the one the compound
+    claim opens with. Matching whole claims, not shared words, keeps a part
+    like "shipped on 6 March" from borrowing support it does not have.
+    """
+    if part == supported:
+        return True
+    if not supported.endswith(" " + part):
+        return False
+    subject = supported[: -len(part)].strip()
+    return compound.startswith(subject + " ")
+
+
+def _absorb_compounds(verdicts: list[ClaimVerdict]) -> list[ClaimVerdict]:
+    """Re-label an "unsupported" claim that only joins claims already supported.
+
+    Judges sometimes list "A and B" next to "A" and "B", then call the
+    combination unsupported because no single passage says both. Nothing in it
+    is new, so it should not count as a hallucination. Each part must match a
+    supported claim whose evidence was verified (see ``_covers``).
+    """
+    supported = [(c, _TRAILING.sub("", _normalise(c.claim))) for c in verdicts if c.status == "supported"]
+    if len(supported) < 2:
+        return verdicts
+    result = []
+    for verdict in verdicts:
+        if verdict.status == "unsupported" and not verdict.downgraded:
+            compound = _TRAILING.sub("", _normalise(verdict.claim))
+            parts = [p for p in _JOINS.split(compound) if p]
+            sources = [next((c for c, text in supported if _covers(p, text, compound)), None) for p in parts]
+            if len(parts) >= 2 and all(sources):
+                found = [c for c in sources if c is not None]
+                verdict = ClaimVerdict(
+                    claim=verdict.claim,
+                    status="supported",
+                    evidence=tuple(dict.fromkeys(ev for c in found for ev in c.evidence)),
+                    reason="only combines claims already supported: " + "; ".join(repr(c.claim) for c in found),
+                )
+        result.append(verdict)
+    return result
+
+
 # --- the check ----------------------------------------------------------------------
 
 def passages_from(output: Any, context: Any) -> list[str]:
@@ -230,11 +281,13 @@ def _prompt(output_text: str, passages: list[str]) -> str:
     numbered = "\n\n".join(f"[{i}]\n{fence(p, f'PASSAGE{i}')}" for i, p in enumerate(passages, start=1))
     return (
         "Check every factual claim in the AGENT OUTPUT against the numbered CONTEXT passages. "
-        "Use only the context, not your own knowledge.\n\n"
+        "Use only the context, not your own knowledge. Judge meaning, not wording: a claim that says the "
+        'same thing in other words, such as "March 6th" for "6 March", is supported.\n\n'
         f"AGENT OUTPUT:\n{fence(output_text, 'OUTPUT')}\n\n"
         "Split the AGENT OUTPUT, and nothing else, into atomic factual claims. The context is only "
         "evidence: never list something as a claim because the context says it. If the agent output does "
-        "not mention a fact, it is not a claim, however relevant it is. Opinions, greetings, questions, and "
+        "not mention a fact, it is not a claim, however relevant it is. List each fact once: do not add a "
+        "claim that only combines claims you already listed. Opinions, greetings, questions, and "
         "statements that the agent does not know something are not claims either. For each claim choose a status:\n"
         '- "supported": a passage states it.\n'
         '- "contradicted": a passage states something incompatible with it.\n'
@@ -262,7 +315,7 @@ def evaluate_grounding(output_text: str, passages: list[str], llm: Callable[...,
         max_tokens=_MAX_TOKENS,
     )
     return GroundingReport(
-        claims=[_verify(claim, passages) for claim in reply.claims],
+        claims=_absorb_compounds([_verify(claim, passages) for claim in reply.claims]),
         passages=passages,
         injection_detected=reply.injection_detected,
         raw_reply=raw,
