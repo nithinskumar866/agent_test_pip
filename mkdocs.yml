@@ -27,6 +27,7 @@ nav:
       - Record and replay: replay.md
       - Datasets: datasets.md
       - The judge: judge.md
+      - Safety: safety.md
       - Cost and budgets: cost.md
   - Reports, the CLI and CI: reports-and-ci.md
   - Releasing: releasing.md

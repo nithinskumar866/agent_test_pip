@@ -14,6 +14,7 @@ from agenttest.assertions.semantic import (
     assert_hallucination_score_below,
     assert_language_matches,
     assert_numbers_grounded,
+    assert_refuses,
     assert_tone_matches,
     check_grounding,
     contains_fact,
@@ -21,6 +22,7 @@ from agenttest.assertions.semantic import (
     invented_numbers_in,
     is_grounded,
     language_matches,
+    refuses,
     satisfies,
     tone_matches,
 )
@@ -71,6 +73,7 @@ __all__ = [
     "assert_eval_prompt",
     "assert_grounded",
     "assert_numbers_grounded",
+    "assert_refuses",
     # semantic predicates
     "contains_fact",
     "hallucination_score",
@@ -78,6 +81,7 @@ __all__ = [
     "answers_question",
     "language_matches",
     "satisfies",
+    "refuses",
     "check_grounding",
     "invented_numbers_in",
     "is_grounded",

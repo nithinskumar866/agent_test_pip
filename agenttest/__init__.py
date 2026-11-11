@@ -9,6 +9,7 @@ from agenttest.assertions.semantic import (
     assert_hallucination_score,
     assert_language_matches,
     assert_numbers_grounded,
+    assert_refuses,
     assert_tone_matches,
     check_grounding,
     invented_numbers_in,
@@ -57,6 +58,15 @@ from agenttest.mocks import (
     mock_tool_sequence,
 )
 from agenttest.replay import Cassette, CassetteMissError, cassette
+from agenttest.safety import (
+    CANARY,
+    INJECTION_ATTACKS,
+    Attack,
+    assert_no_pii_leak,
+    assert_resists_injection,
+    find_pii,
+    injection_attacks,
+)
 
 __version__ = "0.3.0"
 __all__ = [
@@ -105,6 +115,14 @@ __all__ = [
     "check_grounding",
     "assert_grounded",
     "assert_numbers_grounded",
+    "assert_refuses",
+    "assert_no_pii_leak",
+    "find_pii",
+    "assert_resists_injection",
+    "injection_attacks",
+    "INJECTION_ATTACKS",
+    "Attack",
+    "CANARY",
     "invented_numbers_in",
     "assert_contains_fact",
     "assert_hallucination_score",

@@ -148,6 +148,18 @@ def pytest_pyfunc_call(pyfuncitem: Any) -> bool | None:
     return True
 
 
+def _outcome(report: Any) -> str:
+    """pytest's outcome, telling expected failures apart from skips.
+
+    pytest reports an ``xfail`` test that failed as *skipped* and one that
+    passed as *passed*, both with a ``wasxfail`` attribute. Reporting them that
+    way hides known problems: a recorded finding read as "not run".
+    """
+    if hasattr(report, "wasxfail"):
+        return "xfailed" if report.skipped else "xpassed"
+    return str(report.outcome)
+
+
 def pytest_runtest_logreport(report: Any) -> None:
     """Count each test once: its call outcome, or a setup failure/skip."""
     extra = getattr(report, "agenttest", None)
@@ -157,15 +169,18 @@ def pytest_runtest_logreport(report: Any) -> None:
     if not (report.when == "call" or (report.when == "setup" and not report.passed)):
         return
     agent_marked = "agent" in report.keywords
+    outcome = _outcome(report)
     if agent_marked:
-        _outcomes[report.outcome] += 1
+        _outcomes[outcome] += 1
     record = _tests.get(report.nodeid)
     if record is None:
         record = _tests[report.nodeid] = reporting.TestRecord(report.nodeid)
-    record.outcome = report.outcome
+    record.outcome = outcome
     record.duration_s = report.duration
     record.agent_marked = agent_marked
-    if report.failed or report.skipped:
+    if hasattr(report, "wasxfail"):
+        record.message = report.wasxfail or None  # the xfail reason: why this is expected to fail
+    elif report.failed or report.skipped:
         crash = getattr(report.longrepr, "reprcrash", None)
         record.message = getattr(crash, "message", None) or str(report.longrepr)[:2000]
 
@@ -233,9 +248,10 @@ def pytest_terminal_summary(terminalreporter: Any, exitstatus: Any, config: Any)
     runs = _all_runs()
     terminalreporter.write_sep("=", "agenttest summary")
     if _outcomes:
+        expected = "".join(f", {_outcomes[k]} {k}" for k in ("xfailed", "xpassed") if _outcomes[k])
         terminalreporter.write_line(
             f"Agent tests: {_outcomes['passed']} passed, {_outcomes['failed']} failed, "
-            f"{_outcomes['skipped']} skipped"
+            f"{_outcomes['skipped']} skipped{expected}"
         )
     if runs:
         failed_tools = sum(len(r["failed_tools"]) for r in runs)

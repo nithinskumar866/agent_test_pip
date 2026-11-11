@@ -100,7 +100,7 @@ def test_json_report(pytester):
     report = json.loads((pytester.path / "report.json").read_text(encoding="utf-8"))
 
     assert report["summary"] | {"agent_latency_ms": 0} == {
-        "tests": 3, "passed": 2, "failed": 1, "skipped": 0, "agent_runs": 3, "failed_runs": 0,
+        "tests": 3, "passed": 2, "failed": 1, "skipped": 0, "xfailed": 0, "xpassed": 0, "agent_runs": 3, "failed_runs": 0,
         "tokens_used": 0, "cost_usd": 0.0, "tool_calls": 3, "failed_tool_calls": 1, "agent_latency_ms": 0, "flaky": 0,
     }
     tests = {t["nodeid"].split("::")[1]: t for t in report["tests"]}
