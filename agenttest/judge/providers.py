@@ -51,7 +51,11 @@ DEFAULT_TIMEOUTS: Final[dict[str, float]] = {"ollama": 600.0}
 #: Seconds before the first retry; doubles per attempt, capped at ``_MAX_DELAY``.
 _BASE_DELAY: Final[float] = 0.5
 _MAX_DELAY: Final[float] = 8.0
-_TRANSIENT_NAMES: Final[tuple[str, ...]] = ("timeout", "connection", "ratelimit", "overloaded", "unavailable")
+#: Matched against the exception's class names. "network" and "remoteprotocol" cover
+#: httpx's ReadError / WriteError / RemoteProtocolError: a connection a proxy dropped.
+_TRANSIENT_NAMES: Final[tuple[str, ...]] = (
+    "timeout", "connection", "ratelimit", "overloaded", "unavailable", "network", "remoteprotocol",
+)
 
 
 def is_transient(exc: BaseException) -> bool:

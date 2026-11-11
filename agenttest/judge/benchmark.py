@@ -95,6 +95,10 @@ def run_benchmark(
 ) -> dict[str, Any]:
     """Run the cases through the configured judge and score it.
 
+    Scores the judge alone (with its second look, if ``judge_recheck`` is on):
+    the code-only number check is left out, because it would settle most
+    contradicted cases by itself.
+
     Args:
         limit: Use only this many facts (each one is five cases).
         on_progress: Called with ``(done, total)`` after each case.
@@ -122,7 +126,9 @@ def run_benchmark(
             errors.append({"id": case.id, "error": str(exc)})
         else:
             per_kind[case.kind]["total"] += 1
-            problems = _grounding_problems(report, 0.0, allow_disputed=False)
+            # The judge alone: most cases here turn on a changed number, which the code-only
+            # number check would settle without the judge, hiding how good the judge is.
+            problems = _grounding_problems(report, 0.0, allow_disputed=False, check_numbers=False)
             if bool(problems) != case.should_pass:
                 per_kind[case.kind]["correct"] += 1
             else:

@@ -13,6 +13,11 @@
 - **Datasets**: `agenttest.cases`, `load_cases`.
 - **Regression tracking**: `agenttest compare`, `agenttest report --markdown`, and a GitHub Action for pull requests.
 - **Judge accuracy**: `agenttest benchmark`, 100 labelled cases.
+- **Invented numbers caught in code**: `assert_grounded` first checks that every number in the output appears
+  in the context, with no judge call; also `assert_numbers_grounded` and `invented_numbers_in`.
+- **A second look at doubtful claims**: each claim judged unsupported is re-asked on its own, and only upgraded
+  with verified quotes that contain all of its numbers (`judge_recheck`, on by default).
+- **Test coverage gate** in CI (90%), and a CI job that runs the GitHub Action itself.
 - **Frameworks**: Pydantic AI and LlamaIndex adapters; MCP tool mocking and nested `as_tool` tracing for the OpenAI
   Agents SDK; `stream=True` for OpenAI and LangGraph.
 - **Secret redaction** in reports, failure traces and cassettes.
@@ -21,6 +26,12 @@
 ### Changed
 - The Gemini judge uses `google-genai` (the old SDK is deprecated) and defaults to `gemini-3.6-flash`.
 - The JSON report gains `cost_usd` and per-run `tool_calls`.
+- **`assert_grounded` now fails when the output has a number that is nowhere in the context**, without
+  asking the judge. Pass `check_numbers=False` to get the old behaviour.
+- The grounding judge no longer counts a claim that only joins already-supported claims as unsupported, and is
+  told to judge meaning rather than wording ("March 6th" = "6 March").
+- A judge connection dropped mid-reply (httpx `ReadError`, `RemoteProtocolError`) is retried like a timeout.
+- The OpenAI Agents SDK trace records model responses and tool calls in the order they happened.
 
 ## 0.2.0 (unreleased): the rework
 

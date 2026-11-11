@@ -31,6 +31,7 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from agenttest.judge.numbers import invented_numbers
 from agenttest.judge.protocol import ask, extract_json_object, fence
 
 __all__ = ["Status", "Evidence", "ClaimVerdict", "GroundingReport", "evaluate_grounding", "passages_from"]
@@ -92,6 +93,8 @@ class ClaimVerdict:
     judged_status: Status | None = None
     #: Quotes that were not found in the passage they cite.
     rejected_evidence: tuple[Evidence, ...] = ()
+    #: First judged unsupported, then confirmed when the judge re-checked the claim on its own.
+    rechecked: bool = False
 
     @property
     def downgraded(self) -> bool:
@@ -106,6 +109,8 @@ class GroundingReport:
     passages: list[str]
     injection_detected: bool = False
     raw_reply: str = field(default="", repr=False)
+    #: Numbers in the output that appear nowhere in the context (checked in code, see ``numbers``).
+    invented_numbers: list[str] = field(default_factory=list)
 
     def _with(self, status: Status) -> list[ClaimVerdict]:
         return [c for c in self.claims if c.status == status]
@@ -143,13 +148,18 @@ class GroundingReport:
 
     def describe(self) -> str:
         """Human-readable list of every claim and its verdict."""
-        if not self.claims:
-            return "  (the output makes no factual claims)"
         lines = []
+        if self.invented_numbers:
+            numbers = ", ".join(self.invented_numbers)
+            lines.append(f"  [invented numbers] {numbers}  (in the output, nowhere in the context)")
+        if not self.claims:
+            return "\n".join([*lines, "  (the output makes no factual claims)"])
         for claim in self.claims:
             line = f"  [{claim.status}] {claim.claim}"
             if claim.downgraded:
                 line += f"  (judge said {claim.judged_status}; evidence not found in the context)"
+            elif claim.rechecked:
+                line += "  (confirmed on a second look" + (f": {claim.reason})" if claim.reason else ")")
             elif claim.reason:
                 line += f"  — {claim.reason}"
             for ev in claim.evidence:
@@ -305,18 +315,52 @@ def _prompt(output_text: str, passages: list[str]) -> str:
     )
 
 
-def evaluate_grounding(output_text: str, passages: list[str], llm: Callable[..., str]) -> GroundingReport:
-    """Run the grounding check for ``output_text`` against ``passages`` with judge ``llm``."""
-    reply, raw = ask(
-        llm,
-        _prompt(output_text, passages),
-        _parse,
-        what="did not return a valid grounding report",
-        max_tokens=_MAX_TOKENS,
-    )
+#: At most this many claims get a second look per check, to bound the extra judge calls.
+MAX_RECHECKS: Final[int] = 5
+
+
+def _judge(output_text: str, passages: list[str], llm: Callable[..., str]) -> tuple[_Reply, str]:
+    return ask(llm, _prompt(output_text, passages), _parse,
+               what="did not return a valid grounding report", max_tokens=_MAX_TOKENS)
+
+
+def _second_look(verdict: ClaimVerdict, passages: list[str], llm: Callable[..., str]) -> ClaimVerdict:
+    """Ask the judge about one unsupported claim on its own; keep it unless the answer checks out.
+
+    A small judge reading a whole answer at once misses support it finds when
+    shown a single claim. The upgrade still has to pass code: every piece of the
+    second answer must be supported with verified quotes, and those quotes must
+    contain every number in the claim, so an invented number cannot be waved through.
+    """
+    reply, _ = _judge(verdict.claim, passages, llm)
+    parts = [_verify(claim, passages) for claim in reply.claims]
+    if not parts or any(p.status != "supported" for p in parts):
+        return verdict
+    evidence = tuple(dict.fromkeys(ev for p in parts for ev in p.evidence))
+    if invented_numbers(verdict.claim, [ev.quote for ev in evidence]):
+        return verdict
+    return ClaimVerdict(claim=verdict.claim, status="supported", evidence=evidence,
+                        reason="; ".join(p.reason for p in parts if p.reason), rechecked=True)
+
+
+def evaluate_grounding(
+    output_text: str, passages: list[str], llm: Callable[..., str], *, recheck: bool = False
+) -> GroundingReport:
+    """Run the grounding check for ``output_text`` against ``passages`` with judge ``llm``.
+
+    With ``recheck``, each claim judged unsupported (up to ``MAX_RECHECKS``) is
+    asked about again on its own; see ``_second_look``.
+    """
+    reply, raw = _judge(output_text, passages, llm)
+    claims = _absorb_compounds([_verify(claim, passages) for claim in reply.claims])
+    if recheck:
+        doubtful = [i for i, c in enumerate(claims) if c.status == "unsupported"][:MAX_RECHECKS]
+        for i in doubtful:
+            claims[i] = _second_look(claims[i], passages, llm)
     return GroundingReport(
-        claims=_absorb_compounds([_verify(claim, passages) for claim in reply.claims]),
+        claims=claims,
         passages=passages,
         injection_detected=reply.injection_detected,
         raw_reply=raw,
+        invented_numbers=invented_numbers(output_text, passages),
     )

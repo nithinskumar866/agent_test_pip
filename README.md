@@ -8,7 +8,7 @@
 what happens when a tool breaks, whether its answer is backed by its sources, and how often it gets
 things right.
 
-![A failing agent test, showing every step the agent took](docs/assets/failure-trace.png)
+![A failing agent test, showing every step the agent took](https://raw.githubusercontent.com/nithinskumar866/agent_test_pip/main/docs/assets/failure-trace.png)
 
 *When an agent test fails, you see every step the agent took: here the search tool was down, so the
 agent apologised instead of giving the delivery date.*
@@ -305,7 +305,7 @@ in CI against its real SDK, and a nightly job tests the newest versions.
 pytest --agenttest-html=report.html --agenttest-report=report.json
 ```
 
-![The agenttest HTML report](docs/assets/report.png)
+![The agenttest HTML report](https://raw.githubusercontent.com/nithinskumar866/agent_test_pip/main/docs/assets/report.png)
 
 Secrets such as API keys are removed from reports automatically. Compare two runs to catch regressions:
 

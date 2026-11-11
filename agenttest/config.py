@@ -97,6 +97,8 @@ class AgentTestConfig(BaseModel):
     judge_timeout: float | None = Field(default=None, gt=0.0)
     #: Ollama server for the judge, e.g. a RunPod proxy URL (default: ``OLLAMA_HOST``, then localhost).
     judge_base_url: str | None = None
+    #: Give each claim judged unsupported a second look on its own (one extra judge call each).
+    judge_recheck: bool = True
     #: Keep judge replies on disk between sessions (in ``.agenttest_cache/``).
     judge_cache: bool = False
     #: Extra model prices, USD per million tokens: ``{"my-model": {"input": 1, "output": 3}}``.

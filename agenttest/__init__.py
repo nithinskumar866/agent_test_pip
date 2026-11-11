@@ -8,8 +8,10 @@ from agenttest.assertions.semantic import (
     assert_grounded,
     assert_hallucination_score,
     assert_language_matches,
+    assert_numbers_grounded,
     assert_tone_matches,
     check_grounding,
+    invented_numbers_in,
 )
 from agenttest.assertions.structural import (
     assert_cost_under,
@@ -102,6 +104,8 @@ __all__ = [
     "ClaimVerdict",
     "check_grounding",
     "assert_grounded",
+    "assert_numbers_grounded",
+    "invented_numbers_in",
     "assert_contains_fact",
     "assert_hallucination_score",
     "assert_tone_matches",

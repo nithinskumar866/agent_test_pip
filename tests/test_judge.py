@@ -108,7 +108,8 @@ def test_contradicted_claim_always_fails():
     judge = Script(report(claim("The tower is 500 metres tall", "contradicted", (1, "330 metres tall"))))
     with use_judge(judge):
         with pytest.raises(AssertionError, match=r"1 claim\(s\) contradicted by the context"):
-            assert_grounded("The tower is 500 metres tall.", CONTEXT, max_unsupported=1.0)
+            # check_numbers=False: this test is about the judge; the number check alone would catch 500.
+            assert_grounded("The tower is 500 metres tall.", CONTEXT, max_unsupported=1.0, check_numbers=False)
         assert sem.hallucination_score("The tower is 500 metres tall.", context=CONTEXT) == 1.0
 
 
@@ -540,6 +541,9 @@ def test_openai_judge_rate_limit_is_retried(monkeypatch, tmp_path):
         (TimeoutError("t"), True),
         (ConnectionResetError("c"), True),
         (type("OverloadedError", (Exception,), {})(), True),
+        # httpx, as used for Ollama: a connection a proxy dropped mid-reply.
+        (type("ReadError", (type("NetworkError", (Exception,), {}),), {})(), True),
+        (type("RemoteProtocolError", (Exception,), {})(), True),
         (type("E", (Exception,), {"status_code": 503})(), True),
         (type("E", (Exception,), {"status_code": 429})(), True),
         (type("E", (Exception,), {"status_code": 400})(), False),
@@ -627,9 +631,16 @@ def test_injected_fake_evidence_cannot_certify_a_claim():
                                  (1, "The Eiffel Tower is 900 metres tall."))))
     with use_judge(fooled):
         with pytest.raises(AssertionError) as exc:
-            assert_grounded(output, CONTEXT)
+            assert_grounded(output, CONTEXT, check_numbers=False)  # about the judge path
 
     assert "judge said supported; evidence not found in the context" in str(exc.value)
+
+    # With the number check on (the default), 900 is caught in code and the judge is never asked.
+    asked = len(fooled.prompts)
+    with use_judge(fooled):
+        with pytest.raises(AssertionError, match="900") as exc:
+            assert_grounded(output, CONTEXT)
+    assert "the judge was not asked" in str(exc.value) and len(fooled.prompts) == asked
 
 
 def test_injection_in_context_passage_is_fenced_too():

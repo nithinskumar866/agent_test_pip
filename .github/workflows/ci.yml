@@ -65,6 +65,29 @@ jobs:
       - run: pip install -e ".[all]"
       - run: python -m pytest -q tests/test_integrations_real.py tests/test_integrations_e2e.py tests/test_frameworks_extra.py -rs
 
+  coverage:
+    # Every framework SDK installed, so no test skips; fails below 90% (see pyproject.toml).
+    name: Test coverage
+    runs-on: ubuntu-latest
+    env:
+      CREWAI_DISABLE_TELEMETRY: "true"
+      OTEL_SDK_DISABLED: "true"
+      PYDANTIC_AI_NO_BANNER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[all]" "coverage[toml]>=7.5"
+      - run: coverage run -m pytest -q
+      - run: coverage report
+      - run: coverage xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+
   newest-openai-agents:
     # The newest openai-agents needs openai 3, which the [all] install can't
     # currently resolve alongside CrewAI, so it gets its own job.
@@ -102,6 +125,33 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  action:
+    # Runs this repo's GitHub Action (action.yml) on a real report, so it is tested
+    # before anyone relies on it. Commenting is off: there is no pull request here.
+    name: GitHub Action self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: python -m pytest -q examples --agenttest-report "$RUNNER_TEMP/report.json"
+      - name: Report only
+        uses: ./
+        with:
+          report: ${{ runner.temp }}/report.json
+          comment: "false"
+      - name: Compare against a baseline
+        uses: ./
+        with:
+          report: ${{ runner.temp }}/report.json
+          baseline: ${{ runner.temp }}/report.json
+          max-token-increase: "10"
+          comment: "false"
+      - name: The summary was written
+        run: grep -q "No regressions" "$RUNNER_TEMP/agenttest-summary.md"
 
   audit:
     name: Dependency audit

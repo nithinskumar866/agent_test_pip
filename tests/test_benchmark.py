@@ -28,7 +28,9 @@ def _reply(claims, injection=False):
 
 
 def perfect(prompt, system):
-    case = CASES[_output_in(prompt)]
+    case = CASES.get(_output_in(prompt))
+    if case is None:  # a second look at one claim: the oracle knows only invented claims get one
+        return _reply([{"claim": "x", "status": "unsupported"}])
     quote = case.context[0]
     good = {"claim": "c", "status": "supported", "evidence": [{"passage": 1, "quote": quote}]}
     if "<<<PASSAGE2-" in prompt:  # "grounded" and "disputed" share an answer; only the context differs

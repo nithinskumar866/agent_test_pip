@@ -60,6 +60,7 @@ dev = [
     "twine>=5.0",
     "pip-audit>=2.7",
     "pytest-xdist>=3.5",
+    "coverage[toml]>=7.5",
     "mkdocs-material>=9.5",
 ]
 
@@ -88,6 +89,17 @@ agenttest = ["py.typed"]
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = ["agent: an agenttest behavioural test (added by @agent_test)"]
+
+[tool.coverage.run]
+# Run as `coverage run -m pytest`: pytest loads the agenttest plugin before
+# pytest-cov could start, which would mark every import line as missed.
+source = ["agenttest"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.ruff]
 line-length = 120
