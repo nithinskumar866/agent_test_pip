@@ -303,6 +303,8 @@ def test_crewai_classes_restored_after_run():
 
 def test_timing_sanity():
     # Guard against the latency assertions above passing vacuously.
+    # Windows can wake a sleep up to a timer tick early (8.3 ms measured for a 10 ms sleep on CI),
+    # so sleep longer and allow a wide margin.
     start = time.perf_counter()
-    time.sleep(0.01)
-    assert time.perf_counter() - start >= 0.009
+    time.sleep(0.05)
+    assert time.perf_counter() - start >= 0.03
