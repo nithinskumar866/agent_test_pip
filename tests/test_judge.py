@@ -16,6 +16,7 @@ from agenttest import AgentTestConfigError, AgentTestJudgeError, assert_grounded
 from agenttest.assertions import semantic as sem
 from agenttest.core.result import AgentResult, _clear_judge_cache, _judge_llm
 from agenttest.judge import JUDGE_SYSTEM_PROMPT, fence, is_transient, providers
+from tests._http import sdk_http
 
 CONTEXT = [
     "The Eiffel Tower is 330 metres tall and stands in Paris.",
@@ -500,6 +501,7 @@ def test_api_failure_during_grounding_propagates(anthropic_http):
 
 
 def test_missing_api_key_is_a_config_error_and_not_retried(monkeypatch):
+    pytest.importorskip("anthropic")  # without the SDK, the "not installed" error comes first
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     delays: list[float] = []
     monkeypatch.setattr(providers.time, "sleep", delays.append)
@@ -510,7 +512,7 @@ def test_missing_api_key_is_a_config_error_and_not_retried(monkeypatch):
 
 def test_openai_judge_rate_limit_is_retried(monkeypatch, tmp_path):
     openai = pytest.importorskip("openai")
-    import httpx
+    httpx = sdk_http("openai")
 
     calls = []
 
