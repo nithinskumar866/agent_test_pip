@@ -28,6 +28,7 @@ from agenttest import (
 from agenttest.assertions import semantic as sem
 from agenttest.core.result import _clear_judge_cache
 from agenttest.judge import providers
+from tests._http import sdk_http
 
 
 @pytest.fixture(autouse=True)
@@ -536,7 +537,7 @@ def _config(**values):
 
 def test_gemini_judge_with_the_real_sdk_over_mocked_http(monkeypatch):
     pytest.importorskip("google.genai")
-    import httpx
+    httpx = sdk_http("google-genai")
     from google import genai
     from google.genai import types
 

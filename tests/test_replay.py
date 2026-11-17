@@ -9,6 +9,7 @@ import pytest
 import agenttest
 from agenttest import AgentTestConfigError, CassetteMissError, agent_test, cassette
 from agenttest.replay import record_mode
+from tests._http import sdk_http
 
 
 @pytest.fixture(autouse=True)
@@ -277,7 +278,7 @@ def test_record_mode_resolution(monkeypatch):
 
 def test_openai_client_records_and_replays():
     openai = pytest.importorskip("openai")
-    import httpx
+    httpx = sdk_http("openai")
 
     calls = []
 
